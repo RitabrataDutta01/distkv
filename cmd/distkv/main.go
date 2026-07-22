@@ -1,9 +1,14 @@
 package main
 
 import (
-	"distkv/store"
+	"distkv/server"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
 	"sync"
+	"time"
 )
 
 func check(ok bool, msg string) {
@@ -14,34 +19,79 @@ func check(ok bool, msg string) {
 	}
 }
 
-func testBasics(s *store.Store) {
-	fmt.Println("\n=== Basic Tests ===")
-
-	s.Set("color", "blue")
-	val, ok := s.Get("color")
-	check(val == "blue", "Set+Get returns correct value")
-	check(ok == true, "Set+Get returns ok=true")
-
-	val, ok = s.Get("nonexistent")
-	check(val == "", "Get missing key returns zero value")
-	check(ok == false, "Get missing key returns ok=false")
-
-	s.Set("color", "red")
-	val, ok = s.Get("color")
-	check(val == "red", "Overwrite updates value")
-	check(ok == true, "Overwrite still returns ok=true")
-
-	s.Delete("color")
-	val, ok = s.Get("color")
-	check(val == "", "Delete removes key (zero value)")
-	check(ok == false, "Delete removes key (ok=false)")
-
-	s.Delete("still_nonexistent")
-	check(true, "Delete non-existent key does not panic")
+func waitForServer() {
+	for {
+		conn, err := net.Dial("tcp", "localhost:8080")
+		if err == nil {
+			conn.Close()
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
-func testConcurrentAccess(s *store.Store) {
-	fmt.Println("\n=== Concurrent Stress Test ===")
+func httpGet(key string) (string, int) {
+	resp, err := http.Get("http://localhost:8080/" + key)
+	if err != nil {
+		return "", 0
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return strings.TrimRight(string(body), "\n"), resp.StatusCode
+}
+
+func httpPut(key, val string) int {
+	req, _ := http.NewRequest("PUT", "http://localhost:8080/"+key, strings.NewReader(val))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func httpDelete(key string) int {
+	req, _ := http.NewRequest("DELETE", "http://localhost:8080/"+key, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func testBasics() {
+	fmt.Println("\n=== Basic HTTP Tests ===")
+
+	code := httpPut("color", "blue")
+	check(code == 200, "PUT returns 200")
+
+	val, code := httpGet("color")
+	check(val == "blue", "GET returns correct value")
+	check(code == 200, "GET returns 200")
+
+	_, code = httpGet("nonexistent")
+	check(code == 404, "GET missing key returns 404")
+
+	code = httpPut("color", "red")
+	check(code == 200, "PUT overwrite returns 200")
+
+	val, code = httpGet("color")
+	check(val == "red", "GET returns overwritten value")
+	check(code == 200, "GET overwritten returns 200")
+
+	code = httpDelete("color")
+	check(code == 200, "DELETE returns 200")
+
+	_, code = httpGet("color")
+	check(code == 404, "GET after delete returns 404")
+
+	code = httpDelete("still_nonexistent")
+	check(code == 200, "DELETE non-existent returns 200")
+}
+
+func testConcurrentAccess() {
+	fmt.Println("\n=== Concurrent Stress Test (HTTP) ===")
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -53,9 +103,17 @@ func testConcurrentAccess(s *store.Store) {
 			defer wg.Done()
 			key := fmt.Sprintf("key%d", n%10)
 			val := fmt.Sprintf("val%d", n)
-			s.Set(key, val)
-			got, ok := s.Get(key)
-			if !ok {
+
+			code := httpPut(key, val)
+			if code != 200 {
+				mu.Lock()
+				failures++
+				mu.Unlock()
+				return
+			}
+
+			got, code := httpGet(key)
+			if code == 404 {
 				mu.Lock()
 				failures++
 				mu.Unlock()
@@ -73,8 +131,13 @@ func testConcurrentAccess(s *store.Store) {
 }
 
 func main() {
-	s := store.NewStore()
-	testBasics(s)
-	testConcurrentAccess(s)
-	fmt.Println("\nAll tests completed.")
+	srv := server.NewServer()
+	go srv.ListenAndServe()
+
+	waitForServer()
+
+	testBasics()
+	testConcurrentAccess()
+
+	fmt.Println("\nAll HTTP tests completed.")
 }

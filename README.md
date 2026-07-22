@@ -4,7 +4,7 @@ A distributed key-value store built in Go as a learning project for concurrency 
 
 ## Status
 
-Early development. Currently implements a single-node, in-memory key-value store with concurrent-safe access.
+Single-node, in-memory key-value store with HTTP API.
 
 ## Features
 
@@ -12,21 +12,29 @@ Early development. Currently implements a single-node, in-memory key-value store
 - **Set** — store a key-value pair
 - **Delete** — remove a key
 - **Concurrent-safe** — uses `sync.RWMutex` (shared locks for reads, exclusive locks for writes)
+- **HTTP API** — GET/PUT/DELETE endpoints via `/{key}` path
 
-## Usage
+## Project layout
 
-```go
-import "distkv/store"
+```
+store/store.go    — core KV store with concurrent-safe Get/Set/Delete
+server/server.go  — HTTP server wrapping the store
+cmd/server/       — standalone server binary
+cmd/distkv/       — test harness (starts server, runs HTTP tests)
+```
 
-s := store.NewStore()
-s.Set("color", "blue")
+## Usage (standalone server)
 
-val, ok := s.Get("color")
-if ok {
-    fmt.Println("got:", val)
-}
+```bash
+go run ./cmd/server/
+```
 
-s.Delete("color")
+Then use curl:
+
+```bash
+curl -X PUT -d 'blue' http://localhost:8080/color
+curl http://localhost:8080/color
+curl -X DELETE http://localhost:8080/color
 ```
 
 ## Run tests
