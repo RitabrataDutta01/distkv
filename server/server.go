@@ -12,7 +12,7 @@ type Server struct {
 }
 
 func NewServer() *Server {
-	return &Server{store: store.NewStore()}
+	return &Server{store: store.NewStore("snapshot/data.json")}
 }
 
 func (srv *Server) ListenAndServe() error {
