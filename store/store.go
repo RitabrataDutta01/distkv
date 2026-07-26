@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -15,7 +16,10 @@ func NewStore(path string) *Store {
 		data: make(map[string]string),
 		path: path,
 	}
-	s.load()
+	err := s.load()
+	if err != nil {
+		fmt.Println(err)
+	}
 	return s
 }
 
@@ -26,16 +30,16 @@ func (s *Store) Get(key string) (string, bool) {
 	return val, ok
 }
 
-func (s *Store) Set(key, val string) {
+func (s *Store) Set(key, val string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[key] = val
-	s.save()
+	return s.save()
 }
 
-func (s *Store) Delete(key string) {
+func (s *Store) Delete(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.data, key)
-	s.save()
+	return s.save()
 }

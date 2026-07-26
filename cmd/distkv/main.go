@@ -2,10 +2,10 @@ package main
 
 import (
 	"distkv/server"
+	"distkv/store"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -30,68 +30,73 @@ func waitForServer() {
 	}
 }
 
-func httpGet(key string) (string, int) {
-	resp, err := http.Get("http://localhost:8080/" + key)
+func tcpSend(method, key, val string) string {
+	conn, err := net.Dial("tcp", "localhost:8080")
 	if err != nil {
-		return "", 0
+		return ""
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return strings.TrimRight(string(body), "\n"), resp.StatusCode
+	defer conn.Close()
+
+	var req string
+	if method == "PUT" {
+		req = fmt.Sprintf("PUT|/%s|%s", key, val)
+	} else if method == "DELETE" {
+		req = fmt.Sprintf("DELETE|/%s", key)
+	} else {
+		req = fmt.Sprintf("GET|/%s", key)
+	}
+
+	conn.Write([]byte(req))
+
+	buf := make([]byte, 4096)
+	n, _ := conn.Read(buf)
+	return strings.TrimRight(string(buf[:n]), "\n")
 }
 
-func httpPut(key, val string) int {
-	req, _ := http.NewRequest("PUT", "http://localhost:8080/"+key, strings.NewReader(val))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0
-	}
-	resp.Body.Close()
-	return resp.StatusCode
+func tcpGet(key string) string {
+	return tcpSend("GET", key, "")
 }
 
-func httpDelete(key string) int {
-	req, _ := http.NewRequest("DELETE", "http://localhost:8080/"+key, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0
-	}
-	resp.Body.Close()
-	return resp.StatusCode
+func tcpPut(key, val string) bool {
+	resp := tcpSend("PUT", key, val)
+	return resp != ""
+}
+
+func tcpDelete(key string) bool {
+	resp := tcpSend("DELETE", key, "")
+	return resp != ""
 }
 
 func testBasics() {
-	fmt.Println("\n=== Basic HTTP Tests ===")
+	fmt.Println("\n=== Basic TCP Tests ===")
 
-	code := httpPut("color", "blue")
-	check(code == 200, "PUT returns 200")
+	ok := tcpPut("color", "blue")
+	check(ok, "PUT returns success")
 
-	val, code := httpGet("color")
+	val := tcpGet("color")
 	check(val == "blue", "GET returns correct value")
-	check(code == 200, "GET returns 200")
 
-	_, code = httpGet("nonexistent")
-	check(code == 404, "GET missing key returns 404")
+	val = tcpGet("nonexistent")
+	check(val == "", "GET missing key returns empty")
 
-	code = httpPut("color", "red")
-	check(code == 200, "PUT overwrite returns 200")
+	ok = tcpPut("color", "red")
+	check(ok, "PUT overwrite returns success")
 
-	val, code = httpGet("color")
+	val = tcpGet("color")
 	check(val == "red", "GET returns overwritten value")
-	check(code == 200, "GET overwritten returns 200")
 
-	code = httpDelete("color")
-	check(code == 200, "DELETE returns 200")
+	ok = tcpDelete("color")
+	check(ok, "DELETE returns success")
 
-	_, code = httpGet("color")
-	check(code == 404, "GET after delete returns 404")
+	val = tcpGet("color")
+	check(val == "", "GET after delete returns empty")
 
-	code = httpDelete("still_nonexistent")
-	check(code == 200, "DELETE non-existent returns 200")
+	ok = tcpDelete("still_nonexistent")
+	check(ok, "DELETE non-existent returns success")
 }
 
 func testConcurrentAccess() {
-	fmt.Println("\n=== Concurrent Stress Test (HTTP) ===")
+	fmt.Println("\n=== Concurrent Stress Test (TCP) ===")
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -104,21 +109,15 @@ func testConcurrentAccess() {
 			key := fmt.Sprintf("key%d", n%10)
 			val := fmt.Sprintf("val%d", n)
 
-			code := httpPut(key, val)
-			if code != 200 {
+			ok := tcpPut(key, val)
+			if !ok {
 				mu.Lock()
 				failures++
 				mu.Unlock()
 				return
 			}
 
-			got, code := httpGet(key)
-			if code == 404 {
-				mu.Lock()
-				failures++
-				mu.Unlock()
-				return
-			}
+			got := tcpGet(key)
 			if got == "" {
 				mu.Lock()
 				failures++
@@ -130,14 +129,38 @@ func testConcurrentAccess() {
 	check(failures == 0, fmt.Sprintf("Concurrent stress test (0 failures, got %d)", failures))
 }
 
+func testSaveFailure() {
+	fmt.Println("\n=== Save Failure Test ===")
+
+	os.Chmod("snapshot", 0444)
+	defer os.Chmod("snapshot", 0755)
+
+	ok := tcpPut("will-fail", "x")
+	check(!ok, "PUT fails when disk is unwritable")
+
+	ok = tcpDelete("will-fail")
+	check(!ok, "DELETE fails when disk is unwritable")
+}
+
+func testCorruptedSnapshot() {
+	fmt.Println("\n=== Corrupted Snapshot Test ===")
+
+	os.WriteFile("snapshot/corrupt.json", []byte("{{{not json}}}"), 0644)
+	s := store.NewStore("snapshot/corrupt.json")
+	_, ok := s.Get("anything")
+	check(!ok, "Store starts empty after corrupt snapshot load")
+	os.Remove("snapshot/corrupt.json")
+}
+
 func main() {
-	srv := server.NewServer()
-	go srv.ListenAndServe()
+	go server.RunServer("server/config-test.json", "snapshot/data.json")
 
 	waitForServer()
 
 	testBasics()
 	testConcurrentAccess()
+	testSaveFailure()
+	testCorruptedSnapshot()
 
-	fmt.Println("\nAll HTTP tests completed.")
+	fmt.Println("\nAll TCP tests completed.")
 }

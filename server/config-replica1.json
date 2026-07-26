@@ -1,0 +1,5 @@
+{
+  "role": "replica",
+  "address": ":8082",
+  "peers": [":8081"]
+}

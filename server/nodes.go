@@ -6,12 +6,12 @@ import (
 	"strings"
 )
 
-func RunServer(path1, path2 string) {
+func RunNode(path1, path2 string) {
 	cfg, err := LoadConfig(path1)
 	if err != nil {
+		fmt.Println(err)
 		return
 	}
-
 	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return
@@ -27,11 +27,12 @@ func RunServer(path1, path2 string) {
 			return
 		}
 
-		go snap.HandleLeaderConnection(conn, cfg.Peers)
+		go snap.HandleNodeConnection(conn)
 	}
+
 }
 
-func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
+func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	defer conn.Close()
 
 	buffer := make([]byte, 4096)
@@ -64,7 +65,6 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully set with value: %s", key, val)
 		}
-		go ForwardToAllPeers("PUT", key, val, peers)
 	}
 
 	if method == "DELETE" {
@@ -75,7 +75,5 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
 		}
-		go ForwardToAllPeers("DELETE", key, "", peers)
 	}
-
 }

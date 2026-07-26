@@ -19,11 +19,29 @@ func (s *Store) save() error {
 
 	tmpPath := s.path + ".tmp"
 
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+
+	defer os.Remove(tmpPath)
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+
+	if err := f.Close(); err != nil {
 		return err
 	}
 
 	return os.Rename(tmpPath, s.path)
+
 }
 
 func (s *Store) load() error {
