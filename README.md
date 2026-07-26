@@ -4,41 +4,53 @@ A distributed key-value store built in Go as a learning project for concurrency 
 
 ## Status
 
-Single-node, persistent key-value store with HTTP API. Data survives restart via JSON snapshot to disk.
+Phase 3a — raw TCP leader–replica replication. A leader node accepts client requests and forwards mutations to replicas. Data survives restart via JSON snapshot per node.
 
 ## Features
 
-- **Get** — retrieve a value by key (returns value + existence bool)
-- **Set** — store a key-value pair
-- **Delete** — remove a key
-- **Persistence** — JSON snapshot file written atomically on every mutation, loaded on startup
-- **Crash-safe** — writes to a temp file then renames atomically; corrupt snapshots never overwrite valid data
-- **Concurrent-safe** — uses `sync.RWMutex` (shared locks for reads, exclusive locks for writes)
-- **HTTP API** — GET/PUT/DELETE endpoints via `/{key}` path
+- **Get / Set / Delete** — core KV operations
+- **Raw TCP wire protocol** — `PUT|/key|val`, `GET|/key`, `DELETE|/key`
+- **Leader–replica replication** — leader forwards PUT/DELETE to all configured peers
+- **Crash-safe persistence** — atomic temp-file + rename writes with fsync
+- **Concurrent-safe** — `sync.RWMutex` (shared reads, exclusive writes)
+- **Config-driven roles** — JSON config determines primary vs replica behavior
 
 ## Project layout
 
 ```
-store/store.go    — core KV store with concurrent-safe Get/Set/Delete
-store/db.go       — snapshot save/load (JSON, atomic write, crash-safe)
-server/server.go  — HTTP server wrapping the store
-cmd/server/       — standalone server binary
-cmd/distkv/       — test harness (starts server, runs HTTP tests)
-snapshot/         — on-disk snapshot directory
+store/store.go      — core KV store with concurrent-safe Get/Set/Delete
+store/db.go         — snapshot save/load (JSON, atomic write, fsync)
+server/helpers.go   — Config, Snap, LoadConfig, ForwardToPeer, ForwardToAllPeers
+server/server.go    — leader TCP server (RunServer, HandleLeaderConnection)
+server/nodes.go     — replica TCP server (RunNode, HandleNodeConnection)
+server/config-*.json — per-node config files
+cmd/server/         — server binary; reads config path from CLI arg
+cmd/distkv/         — test harness (starts server, runs TCP tests)
+snapshot/           — per-node on-disk snapshots (gitignored)
 ```
 
-## Usage (standalone server)
+## Usage (cluster)
+
+In separate terminals:
 
 ```bash
-go run ./cmd/server/
+go run ./cmd/server/ server/config-primary.json
+go run ./cmd/server/ server/config-replica1.json
+go run ./cmd/server/ server/config-replica2.json
 ```
 
-Then use curl:
+Then interact with the leader:
 
 ```bash
-curl -X PUT -d 'blue' http://localhost:8080/color
-curl http://localhost:8080/color
-curl -X DELETE http://localhost:8080/color
+printf "PUT|/color|blue" | nc localhost 8081
+printf "GET|/color"      | nc localhost 8081
+printf "DELETE|/color"   | nc localhost 8081
+```
+
+Verify replication — same GET on a replica should return the value:
+
+```bash
+printf "GET|/color" | nc localhost 8082
 ```
 
 ## Run tests
