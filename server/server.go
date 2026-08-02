@@ -24,7 +24,8 @@ func RunServer(path1, path2 string) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			return
+			fmt.Printf("Warning: Connection error: %v\n", err)
+			continue
 		}
 
 		go snap.HandleLeaderConnection(conn, cfg.Peers)
@@ -42,6 +43,11 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 	rawText := string(buffer[:n])
 	parts := strings.Split(rawText, "|")
 
+	if len(parts) < 2 {
+		fmt.Fprintf(conn, "ERROR: Invalid request format\n")
+		return
+	}
+
 	method := parts[0]
 
 	if method == "GET" {
@@ -49,12 +55,18 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 
 		val, ok := snap.store.Get(key)
 		if !ok {
+			fmt.Fprintf(conn, "404 Not Found")
 			return
 		}
 		fmt.Fprintf(conn, "%s", val)
 	}
 
 	if method == "PUT" {
+		if len(parts) < 3 {
+			fmt.Fprintf(conn, "ERROR: PUT request missing value\n")
+			return
+		}
+
 		key := parts[1]
 		val := parts[2]
 
@@ -64,7 +76,12 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully set with value: %s", key, val)
 		}
-		go ForwardToAllPeers("PUT", key, val, peers)
+		go func() {
+			failedPeers := ForwardToAllPeers("PUT", key, val, peers)
+			if len(failedPeers) > 0 {
+				fmt.Printf("Warning: Failed to replicate to peers: %v\n", failedPeers)
+			}
+		}()
 	}
 
 	if method == "DELETE" {
@@ -75,7 +92,12 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
 		}
-		go ForwardToAllPeers("DELETE", key, "", peers)
+		go func() {
+			failedPeers := ForwardToAllPeers("DELETE", key, "", peers)
+			if len(failedPeers) > 0 {
+				fmt.Printf("Warning: Failed to replicate to peers: %v\n", failedPeers)
+			}
+		}()
 	}
 
 }

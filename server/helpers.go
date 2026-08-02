@@ -56,8 +56,25 @@ func ForwardToPeer(peer, method, key, val string) error {
 	return err
 }
 
-func ForwardToAllPeers(method, key, val string, peers []string) {
+func ForwardToAllPeers(method, key, val string, peers []string) []string {
+	var failedPeers []string
+	resultChan := make(chan string, len(peers))
 	for _, peer := range peers {
-		go ForwardToPeer(peer, method, key, val)
+		go func(p string) {
+			err := ForwardToPeer(p, method, key, val)
+
+			if err != nil {
+				resultChan <- p
+			} else {
+				resultChan <- ""
+			}
+		}(peer)
 	}
+	for i := 0; i < len(peers); i++ {
+		failedPeer := <-resultChan
+		if failedPeer != "" {
+			failedPeers = append(failedPeers, failedPeer)
+		}
+	}
+	return failedPeers
 }

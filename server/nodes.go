@@ -9,11 +9,12 @@ import (
 func RunNode(path1, path2 string) {
 	cfg, err := LoadConfig(path1)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("fatal: %v\n", err)
 		return
 	}
 	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
+		fmt.Printf("fatal: %v\n", err)
 		return
 	}
 
@@ -24,6 +25,7 @@ func RunNode(path1, path2 string) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			fmt.Printf("fatal: %v\n", err)
 			return
 		}
 
@@ -38,6 +40,7 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	buffer := make([]byte, 4096)
 	n, err := conn.Read(buffer)
 	if err != nil {
+		fmt.Printf("fatal: %v\n", err)
 		return
 	}
 	rawText := string(buffer[:n])
@@ -61,6 +64,7 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 
 		err = snap.store.Set(key, val)
 		if err != nil {
+			fmt.Printf("fatal: %v\n", err)
 			return
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully set with value: %s", key, val)
@@ -71,6 +75,7 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 		key := parts[1]
 		err := snap.store.Delete(key)
 		if err != nil {
+			fmt.Printf("fatal: %v\n", err)
 			return
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
