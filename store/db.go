@@ -4,19 +4,43 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 )
 
-func (s *Store) save() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
-		return err
-	}
+type fileFormat struct {
+	Version   int               `json:"version"`
+	Timestamp int64             `json:"timestamp"`
+	Data      map[string]string `json:"data"`
+}
 
-	data, err := json.Marshal(s.data)
+func (s *Store) save() error {
+
+	version := s.version + 1
+	ts := time.Now().UnixNano()
+	data, err := json.Marshal(fileFormat{
+		Version:   version,
+		Timestamp: ts,
+		Data:      s.data,
+	})
 
 	if err != nil {
 		return err
 	}
 
+	if err := s.writeFile(data); err != nil {
+		return err
+	}
+
+	s.version = version
+	s.savedAt = ts
+	return nil
+
+}
+
+func (s *Store) writeFile(data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+		return err
+	}
 	tmpPath := s.path + ".tmp"
 
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
@@ -40,7 +64,10 @@ func (s *Store) save() error {
 		return err
 	}
 
-	return os.Rename(tmpPath, s.path)
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		return err
+	}
+	return nil
 
 }
 
@@ -50,10 +77,23 @@ func (s *Store) load() error {
 		return err
 	}
 
-	err = json.Unmarshal(file, &s.data)
-	if err != nil {
+	var ff fileFormat
+
+	if err := json.Unmarshal(file, &ff); err != nil {
 		return err
 	}
+
+	if ff.Data == nil {
+		var legacy map[string]string
+		if err := json.Unmarshal(file, &legacy); err != nil {
+			return err
+		}
+		ff.Data = legacy
+	}
+
+	s.data = ff.Data
+	s.version = ff.Version
+	s.savedAt = ff.Timestamp
 
 	return nil
 }

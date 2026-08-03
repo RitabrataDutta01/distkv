@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -98,6 +99,28 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 				fmt.Printf("Warning: Failed to replicate to peers: %v\n", failedPeers)
 			}
 		}()
+	}
+
+	if method == "SYNC" {
+		if len(parts) < 2 {
+			fmt.Fprintf(conn, "ERROR: SYNC request missing version\n")
+			return
+		}
+		nodeVersion, err := strconv.Atoi(parts[1])
+		if err != nil {
+			fmt.Fprintf(conn, "ERROR: invalid SYNC version\n")
+			return
+		}
+		if nodeVersion == snap.store.Version() {
+			fmt.Fprintf(conn, "SYNC_OK\n")
+		} else {
+			snapJSON, err := snap.store.Snapshot()
+			if err != nil {
+				return
+			}
+			fmt.Fprintf(conn, "SYNC_DATA|%s\n", snapJSON)
+		}
+		return
 	}
 
 }

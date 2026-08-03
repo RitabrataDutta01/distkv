@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bufio"
+	"distkv/store"
 	"fmt"
 	"net"
 	"strings"
@@ -21,6 +23,7 @@ func RunNode(path1, path2 string) {
 	defer listener.Close()
 
 	snap := LoadSnap(path2)
+	SyncWithLeader(cfg.Leader, snap.store)
 
 	for {
 		conn, err := listener.Accept()
@@ -32,6 +35,29 @@ func RunNode(path1, path2 string) {
 		go snap.HandleNodeConnection(conn)
 	}
 
+}
+
+func SyncWithLeader(leader string, st *store.Store) {
+	addr := "127.0.0.1" + leader
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return
+	}
+
+	defer conn.Close()
+
+	fmt.Fprintf(conn, "SYNC|%d", st.Version())
+
+	resp, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return
+	}
+
+	if strings.HasPrefix(resp, "SYNC_DATA|") {
+		if err := st.ApplySnapshot([]byte(strings.TrimPrefix(resp, "SYNC_DATA|"))); err != nil {
+			return
+		}
+	}
 }
 
 func (snap *Snap) HandleNodeConnection(conn net.Conn) {

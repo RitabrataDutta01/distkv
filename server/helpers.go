@@ -9,9 +9,10 @@ import (
 )
 
 type Config struct {
-	Role  string   `json:"role"`
-	Addr  string   `json:"address"`
-	Peers []string `json:"peers"`
+	Role   string   `json:"role"`
+	Addr   string   `json:"address"`
+	Peers  []string `json:"peers"`
+	Leader string   `json:"leader"`
 }
 type Snap struct {
 	store *store.Store

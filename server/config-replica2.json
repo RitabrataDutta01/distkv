@@ -1,5 +1,6 @@
 {
   "role": "replica",
   "address": ":8083",
-  "peers": [":8081"]
+  "peers": [":8081"],
+  "leader": ":8081"
 }
