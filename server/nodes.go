@@ -2,10 +2,12 @@ package server
 
 import (
 	"bufio"
-	"distkv/store"
 	"fmt"
 	"net"
 	"strings"
+	"time"
+
+	"distkv/store"
 )
 
 func RunNode(path1, path2 string) {
@@ -28,13 +30,13 @@ func RunNode(path1, path2 string) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Printf("fatal: %v\n", err)
-			return
+			fmt.Printf("Warning: Connection error: %v\n", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 
 		go snap.HandleNodeConnection(conn)
 	}
-
 }
 
 func SyncWithLeader(leader string, st *store.Store) {
@@ -71,6 +73,10 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	}
 	rawText := string(buffer[:n])
 	parts := strings.Split(rawText, "|")
+	if len(parts) < 2 {
+		fmt.Printf("Error!! no argument passed")
+		return
+	}
 
 	method := parts[0]
 
@@ -85,6 +91,10 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	}
 
 	if method == "PUT" {
+		if len(parts) < 3 {
+			fmt.Printf("Error!! not enough arguments found")
+			return
+		}
 		key := parts[1]
 		val := parts[2]
 
