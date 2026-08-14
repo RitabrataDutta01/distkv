@@ -48,7 +48,7 @@ func SyncWithLeader(leader string, st *store.Store) {
 
 	defer conn.Close()
 
-	fmt.Fprintf(conn, "SYNC|%d", st.Version())
+	fmt.Fprintf(conn, "SYNC|%d\n", st.Version())
 
 	resp, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
@@ -65,23 +65,20 @@ func SyncWithLeader(leader string, st *store.Store) {
 func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	defer conn.Close()
 
-	buffer := make([]byte, 4096)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		fmt.Printf("fatal: %v\n", err)
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil && len(line) == 0 {
 		return
 	}
-	rawText := string(buffer[:n])
-	parts := strings.Split(rawText, "|")
-	if len(parts) < 2 {
-		fmt.Printf("Error!! no argument passed")
+	fields := DecodeRequest(line)
+	if len(fields) < 2 {
+		fmt.Printf("Error!! no argument passed\n")
 		return
 	}
 
-	method := parts[0]
+	method := fields[0]
 
 	if method == "GET" {
-		key := parts[1]
+		key := fields[1]
 
 		val, ok := snap.store.Get(key)
 		if !ok {
@@ -91,12 +88,12 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	}
 
 	if method == "PUT" {
-		if len(parts) < 3 {
-			fmt.Printf("Error!! not enough arguments found")
+		if len(fields) < 3 {
+			fmt.Printf("Error!! not enough arguments found\n")
 			return
 		}
-		key := parts[1]
-		val := parts[2]
+		key := fields[1]
+		val := fields[2]
 
 		err = snap.store.Set(key, val)
 		if err != nil {
@@ -108,7 +105,7 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	}
 
 	if method == "DELETE" {
-		key := parts[1]
+		key := fields[1]
 		err := snap.store.Delete(key)
 		if err != nil {
 			fmt.Printf("fatal: %v\n", err)

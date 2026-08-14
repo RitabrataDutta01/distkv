@@ -1,10 +1,10 @@
 package server
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 )
 
 func RunServer(path1, path2 string) {
@@ -36,14 +36,11 @@ func RunServer(path1, path2 string) {
 func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 	defer conn.Close()
 
-	buffer := make([]byte, 4096)
-	n, err := conn.Read(buffer)
-	if err != nil {
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil && len(line) == 0 {
 		return
 	}
-	rawText := string(buffer[:n])
-	parts := strings.Split(rawText, "|")
-
+	parts := DecodeRequest(line)
 	if len(parts) < 2 {
 		fmt.Fprintf(conn, "ERROR: Invalid request format\n")
 		return
@@ -56,7 +53,6 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 
 		val, ok := snap.store.Get(key)
 		if !ok {
-			fmt.Fprintf(conn, "404 Not Found")
 			return
 		}
 		fmt.Fprintf(conn, "%s", val)

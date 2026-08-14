@@ -9,7 +9,7 @@ Phase 4 — versioned snapshots with replica catch-up on startup. A leader node 
 ## Features
 
 - **Get / Set / Delete** — core KV operations
-- **Raw TCP wire protocol** — `PUT|/key|val`, `GET|/key`, `DELETE|/key`, `SYNC|<version>`
+- **Raw TCP wire protocol** — newline-framed `METHOD|key|val\n` requests with escaping of `|`, `\`, and newline in keys/values
 - **Leader–replica replication** — leader forwards PUT/DELETE to all configured peers
 - **Versioned snapshots** — every save stores a monotonic `version` and `timestamp` alongside the data
 - **Replica startup sync** — replicas ping the leader on boot and download a full snapshot on version mismatch
@@ -22,7 +22,7 @@ Phase 4 — versioned snapshots with replica catch-up on startup. A leader node 
 ```
 store/store.go      — core KV store: Get/Set/Delete, Version/SavedAt, Snapshot/ApplySnapshot
 store/db.go         — snapshot save/load (JSON, atomic write, fsync) and writeFile helper
-server/helpers.go   — Config, Snap, LoadConfig, ForwardToPeer, ForwardToAllPeers
+server/helpers.go   — Config, Snap, LoadConfig, ForwardToPeer, ForwardToAllPeers, Encoder/EncodeRequest/DecodeRequest
 server/server.go    — leader TCP server (RunServer, HandleLeaderConnection, SYNC handler)
 server/nodes.go     — replica TCP server (RunNode, HandleNodeConnection, SyncWithLeader)
 server/config-*.json — per-node config files
@@ -55,6 +55,24 @@ On startup a replica (`RunNode`) sends `SYNC|<version>` to its leader:
 
 The leader is authoritative: any mismatch (even if the replica's version is higher) results in the replica copying the leader's state.
 
+## Wire protocol
+
+Requests are newline-terminated and pipe-delimited. A field containing `|`, a backslash, or a newline is escaped on the wire:
+
+| raw | wire |
+|-----|------|
+| `|`  | `\|` |
+| `\`  | `\\` |
+| newline | `\n` (backslash + letter `n`) |
+
+Frame: `METHOD|key|value\n`
+
+- **PUT** — 3 fields: `PUT|/color|blue\n`
+- **GET / DELETE** — 2 fields: `GET|/color\n`, `DELETE|/color\n`
+- **SYNC** — 2 fields: `SYNC|<version>\n`
+
+The receiver trims a trailing newline and unescapes fields. The trailing `\n` is optional in practice — a request followed by connection close (as sent by `nc`) is accepted too. Responses are plain text and are not escaped.
+
 ## Usage (cluster)
 
 In separate terminals:
@@ -68,15 +86,15 @@ go run ./cmd/server/ server/config-replica2.json
 Then interact with the leader:
 
 ```bash
-printf "PUT|/color|blue" | nc localhost 8081
-printf "GET|/color"      | nc localhost 8081
-printf "DELETE|/color"   | nc localhost 8081
+printf "PUT|/color|blue\n" | nc localhost 8081
+printf "GET|/color\n"      | nc localhost 8081
+printf "DELETE|/color\n"   | nc localhost 8081
 ```
 
 Verify replication — same GET on a replica should return the value:
 
 ```bash
-printf "GET|/color" | nc localhost 8082
+printf "GET|/color\n" | nc localhost 8082
 ```
 
 ## Configuration

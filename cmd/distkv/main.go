@@ -37,15 +37,7 @@ func tcpSend(method, key, val string) string {
 	}
 	defer conn.Close()
 
-	var req string
-	if method == "PUT" {
-		req = fmt.Sprintf("PUT|/%s|%s", key, val)
-	} else if method == "DELETE" {
-		req = fmt.Sprintf("DELETE|/%s", key)
-	} else {
-		req = fmt.Sprintf("GET|/%s", key)
-	}
-
+	req := server.EncodeRequest(method, "/"+key, val)
 	conn.Write([]byte(req))
 
 	buf := make([]byte, 4096)
@@ -93,6 +85,16 @@ func testBasics() {
 
 	ok = tcpDelete("still_nonexistent")
 	check(ok, "DELETE non-existent returns success")
+}
+
+func testEscaping() {
+	fmt.Println("\n=== Escaping Round-Trip Test ===")
+
+	ok := tcpPut("tricky", "a|b\nc")
+	check(ok, "PUT with special characters succeeds")
+
+	val := tcpGet("tricky")
+	check(val == "a|b\nc", "GET returns pipe and newline intact")
 }
 
 func testConcurrentAccess() {
@@ -158,6 +160,7 @@ func main() {
 	waitForServer()
 
 	testBasics()
+	testEscaping()
 	testConcurrentAccess()
 	testSaveFailure()
 	testCorruptedSnapshot()
