@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 )
 
 type Config struct {
@@ -16,6 +17,16 @@ type Config struct {
 }
 type Snap struct {
 	store *store.Store
+}
+
+type pingResult struct {
+	peer    string
+	isAlive bool
+}
+
+type peerRegistry struct {
+	alive map[string]bool
+	mu    sync.RWMutex
 }
 
 func LoadSnap(path string) *Snap {
@@ -116,10 +127,17 @@ func ForwardToPeer(peer, method, key, val string) error {
 	return err
 }
 
-func ForwardToAllPeers(method, key, val string, peers []string) []string {
+func ForwardToAllPeers(method, key, val string, peers []string, registry *peerRegistry) []string {
 	var failedPeers []string
 	resultChan := make(chan string, len(peers))
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
 	for _, peer := range peers {
+		if !registry.alive[peer] {
+			resultChan <- ""
+			continue
+		}
 		go func(p string) {
 			err := ForwardToPeer(p, method, key, val)
 

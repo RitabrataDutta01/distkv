@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
+	"time"
 )
 
 func RunServer(path1, path2 string) {
@@ -20,6 +22,12 @@ func RunServer(path1, path2 string) {
 
 	defer listener.Close()
 
+	registry := &peerRegistry{
+		alive: make(map[string]bool),
+	}
+
+	go healthCheckEngine(cfg.Peers, registry)
+
 	snap := LoadSnap(path2)
 
 	for {
@@ -29,11 +37,71 @@ func RunServer(path1, path2 string) {
 			continue
 		}
 
-		go snap.HandleLeaderConnection(conn, cfg.Peers)
+		go snap.HandleLeaderConnection(conn, cfg.Peers, registry)
 	}
 }
 
-func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
+func healthCheckEngine(peers []string, registry *peerRegistry) {
+
+	ticker := time.NewTicker(5 * time.Minute)
+
+	for range ticker.C {
+		healthy, dead := healthCheck(peers)
+		writeReg(registry, healthy, dead)
+	}
+}
+
+func writeReg(registry *peerRegistry, healthy []string, dead []string) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for _, h := range healthy {
+		registry.alive[h] = true
+	}
+	for _, d := range dead {
+		registry.alive[d] = false
+	}
+}
+
+func healthCheck(peers []string) ([]string, []string) {
+	var healthy, dead []string
+	resultChan := make(chan pingResult, len(peers))
+
+	for _, peer := range peers {
+		go func(p string) {
+			addr := "127.0.0.1" + p
+			conn, err := net.Dial("tcp", addr)
+			if err != nil {
+				resultChan <- pingResult{peer: p, isAlive: false}
+				return
+			}
+			defer conn.Close()
+			var req string
+			req = EncodeRequest("PING", "", "")
+			if _, err := conn.Write([]byte(req)); err != nil {
+				resultChan <- pingResult{peer: p, isAlive: false}
+				return
+			}
+
+			resp, err := bufio.NewReader(conn).ReadString('\n')
+			if err != nil || strings.TrimSpace(resp) != "PONG" {
+				resultChan <- pingResult{peer: p, isAlive: false}
+				return
+			}
+			resultChan <- pingResult{peer: p, isAlive: true}
+		}(peer)
+	}
+	for i := 0; i < len(peers); i++ {
+		result := <-resultChan
+		if !result.isAlive {
+			dead = append(dead, result.peer)
+		} else {
+			healthy = append(healthy, result.peer)
+		}
+	}
+	return healthy, dead
+}
+
+func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string, registy *peerRegistry) {
 	defer conn.Close()
 
 	line, err := bufio.NewReader(conn).ReadString('\n')
@@ -74,7 +142,7 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 			fmt.Fprintf(conn, "Key: %s succesfully set with value: %s", key, val)
 		}
 		go func() {
-			failedPeers := ForwardToAllPeers("PUT", key, val, peers)
+			failedPeers := ForwardToAllPeers("PUT", key, val, peers, registy)
 			if len(failedPeers) > 0 {
 				fmt.Printf("Warning: Failed to replicate to peers: %v\n", failedPeers)
 			}
@@ -90,7 +158,7 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string) {
 			fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
 		}
 		go func() {
-			failedPeers := ForwardToAllPeers("DELETE", key, "", peers)
+			failedPeers := ForwardToAllPeers("DELETE", key, "", peers, registy)
 			if len(failedPeers) > 0 {
 				fmt.Printf("Warning: Failed to replicate to peers: %v\n", failedPeers)
 			}

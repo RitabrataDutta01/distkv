@@ -2,7 +2,9 @@ package server
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -65,12 +67,21 @@ func SyncWithLeader(leader string, st *store.Store) {
 func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	defer conn.Close()
 
-	line, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil && len(line) == 0 {
+	connLimit := io.LimitedReader{conn, 1 << 20}
+	reader := bufio.NewReader(&connLimit)
+
+	line, err := reader.ReadString('\n')
+	if err != nil || len(line) == 0 {
+
+		if errors.Is(err, io.EOF) && connLimit.N == 0 {
+			fmt.Fprintf(conn, "Payload too big, max payload size is 1MB\n")
+			return
+		}
 		return
 	}
+
 	fields := DecodeRequest(line)
-	if len(fields) < 2 {
+	if len(fields) < 2 && fields[0] != "PING" {
 		fmt.Printf("Error!! no argument passed\n")
 		return
 	}
@@ -113,5 +124,9 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
 		}
+	}
+
+	if method == "PING" {
+		fmt.Fprintf(conn, "PONG\n")
 	}
 }
