@@ -3,10 +3,12 @@ package server
 import (
 	"distkv/store"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Config struct {
@@ -114,12 +116,20 @@ func LoadConfig(path string) (*Config, error) {
 
 func ForwardToPeer(peer, method, key, val string) error {
 	addr := "127.0.0.1" + peer
-	conn, err := net.Dial("tcp", addr)
+	timeout := 5 * time.Second
+	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			fmt.Println("Connection timeout:", err)
+		} else {
+			fmt.Println("Connection error:", err)
+		}
 		return err
 	}
 
 	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	var req string
 	req = EncodeRequest(method, key, val)
@@ -131,7 +141,6 @@ func ForwardToAllPeers(method, key, val string, peers []string, registry *peerRe
 	var failedPeers []string
 	resultChan := make(chan string, len(peers))
 	registry.mu.RLock()
-	defer registry.mu.RUnlock()
 
 	for _, peer := range peers {
 		if !registry.alive[peer] {
@@ -148,10 +157,17 @@ func ForwardToAllPeers(method, key, val string, peers []string, registry *peerRe
 			}
 		}(peer)
 	}
+
+	registry.mu.RUnlock()
+
 	for i := 0; i < len(peers); i++ {
 		failedPeer := <-resultChan
 		if failedPeer != "" {
 			failedPeers = append(failedPeers, failedPeer)
+
+			registry.mu.Lock()
+			registry.alive[failedPeer] = false
+			registry.mu.Unlock()
 		}
 	}
 	return failedPeers

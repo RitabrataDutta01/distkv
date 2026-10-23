@@ -2,7 +2,9 @@ package server
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -26,6 +28,10 @@ func RunServer(path1, path2 string) {
 		alive: make(map[string]bool),
 	}
 
+	for _, peer := range cfg.Peers {
+		registry.alive[peer] = true
+	}
+
 	go healthCheckEngine(cfg.Peers, registry)
 
 	snap := LoadSnap(path2)
@@ -34,6 +40,7 @@ func RunServer(path1, path2 string) {
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Printf("Warning: Connection error: %v\n", err)
+			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
@@ -43,7 +50,10 @@ func RunServer(path1, path2 string) {
 
 func healthCheckEngine(peers []string, registry *peerRegistry) {
 
-	ticker := time.NewTicker(5 * time.Minute)
+	healthy, dead := healthCheck(peers)
+	writeReg(registry, healthy, dead)
+
+	ticker := time.NewTicker(1 * time.Minute)
 
 	for range ticker.C {
 		healthy, dead := healthCheck(peers)
@@ -69,12 +79,14 @@ func healthCheck(peers []string) ([]string, []string) {
 	for _, peer := range peers {
 		go func(p string) {
 			addr := "127.0.0.1" + p
-			conn, err := net.Dial("tcp", addr)
+			timeout := 5 * time.Second
+			conn, err := net.DialTimeout("tcp", addr, timeout)
 			if err != nil {
 				resultChan <- pingResult{peer: p, isAlive: false}
 				return
 			}
 			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(5 * time.Second))
 			var req string
 			req = EncodeRequest("PING", "", "")
 			if _, err := conn.Write([]byte(req)); err != nil {
@@ -103,9 +115,18 @@ func healthCheck(peers []string) ([]string, []string) {
 
 func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string, registy *peerRegistry) {
 	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	line, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil && len(line) == 0 {
+	connLimit := io.LimitedReader{R: conn, N: 1 << 20}
+	reader := bufio.NewReader(&connLimit)
+
+	line, err := reader.ReadString('\n')
+	if err != nil || len(line) == 0 {
+		if errors.Is(err, io.EOF) && connLimit.N == 0 {
+			fmt.Fprintf(conn, "Payload too big, max payload size is 1MB\n")
+			return
+		}
+
 		return
 	}
 	parts := DecodeRequest(line)

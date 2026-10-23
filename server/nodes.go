@@ -2,14 +2,13 @@ package server
 
 import (
 	"bufio"
+	"distkv/store"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strings"
 	"time"
-
-	"distkv/store"
 )
 
 func RunNode(path1, path2 string) {
@@ -43,15 +42,22 @@ func RunNode(path1, path2 string) {
 
 func SyncWithLeader(leader string, st *store.Store) {
 	addr := "127.0.0.1" + leader
-	conn, err := net.Dial("tcp", addr)
+	timeout := 5 * time.Second
+	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			fmt.Println("Connection timeout:", err)
+		} else {
+			fmt.Println("Connection error:", err)
+		}
 		return
 	}
 
 	defer conn.Close()
 
-	fmt.Fprintf(conn, "SYNC|%d\n", st.Version())
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
+	fmt.Fprintf(conn, "SYNC|%d\n", st.Version())
 	resp, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
 		return
@@ -66,8 +72,9 @@ func SyncWithLeader(leader string, st *store.Store) {
 
 func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	connLimit := io.LimitedReader{conn, 1 << 20}
+	connLimit := io.LimitedReader{R: conn, N: 1 << 20}
 	reader := bufio.NewReader(&connLimit)
 
 	line, err := reader.ReadString('\n')
