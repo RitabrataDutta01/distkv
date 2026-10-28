@@ -1,9 +1,11 @@
 package store
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -73,27 +75,47 @@ func (s *Store) writeFile(data []byte) error {
 
 func (s *Store) load() error {
 	file, err := os.ReadFile(s.path)
-	if err != nil {
-		return err
-	}
-
-	var ff fileFormat
-
-	if err := json.Unmarshal(file, &ff); err != nil {
-		return err
-	}
-
-	if ff.Data == nil {
-		var legacy map[string]string
-		if err := json.Unmarshal(file, &legacy); err != nil {
-			return err
+	if err == nil {
+		var ff fileFormat
+		if err := json.Unmarshal(file, &ff); err == nil {
+			if ff.Data == nil {
+				var legacy map[string]string
+				json.Unmarshal(file, &legacy)
+				ff.Data = legacy
+			}
+			s.data = ff.Data
+			s.version = ff.Version
+			s.savedAt = ff.Timestamp
 		}
-		ff.Data = legacy
 	}
 
-	s.data = ff.Data
-	s.version = ff.Version
-	s.savedAt = ff.Timestamp
+	if s.data == nil {
+		s.data = make(map[string]string)
+	}
 
-	return nil
+	lf, err := os.Open(s.path + ".log")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+	}
+	defer lf.Close()
+
+	scanner := bufio.NewScanner(lf)
+
+	for scanner.Scan() {
+		parts := strings.Split(scanner.Text(), "|")
+
+		if len(parts) == 0 {
+			continue
+		}
+
+		if parts[0] == "SET" && len(parts) == 3 {
+			s.data[parts[1]] = parts[2]
+		} else if parts[0] == "DELETE" && len(parts) == 2 {
+			delete(s.data, parts[1])
+		}
+	}
+
+	return scanner.Err()
 }

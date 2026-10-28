@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -13,6 +14,7 @@ type Store struct {
 	path    string
 	version int
 	savedAt int64
+	log     *os.File
 }
 
 func (s *Store) Version() int {
@@ -28,15 +30,44 @@ func (s *Store) SavedAt() time.Time {
 }
 
 func NewStore(path string) *Store {
+
+	file, err := os.OpenFile(path+".log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("Error opening log file:", err)
+	}
+
 	s := &Store{
 		data: make(map[string]string),
 		path: path,
+		log:  file,
 	}
-	err := s.load()
+
+	err = s.load()
 	if err != nil {
 		fmt.Println(err)
 	}
+
+	go s.StartCompaction()
+
 	return s
+}
+
+func (s *Store) StartCompaction() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+
+		s.mu.Lock()
+		s.save()
+
+		if err := s.log.Truncate(0); err == nil {
+			s.log.Seek(0, 0)
+		}
+
+		s.mu.Unlock()
+	}
+
 }
 
 func (s *Store) Get(key string) (string, bool) {
@@ -50,14 +81,26 @@ func (s *Store) Set(key, val string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[key] = val
-	return s.save()
+	_, err := fmt.Fprintf(s.log, "SET|%s|%s\n", key, val)
+
+	if err != nil {
+		return err
+	}
+
+	return s.log.Sync()
 }
 
 func (s *Store) Delete(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.data, key)
-	return s.save()
+	_, err := fmt.Fprintf(s.log, "DELETE|%s\n", key)
+
+	if err != nil {
+		return err
+	}
+
+	return s.log.Sync()
 }
 
 func (s *Store) Snapshot() ([]byte, error) {
