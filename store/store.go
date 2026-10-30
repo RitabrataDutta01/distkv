@@ -9,12 +9,15 @@ import (
 )
 
 type Store struct {
-	data    map[string]string
-	mu      sync.RWMutex
-	path    string
-	version int
-	savedAt int64
-	log     *os.File
+	data     map[string]string
+	mu       sync.RWMutex
+	path     string
+	version  int
+	savedAt  int64
+	log      *os.File
+	logChan  chan string
+	wg       sync.WaitGroup
+	isClosed bool
 }
 
 func (s *Store) Version() int {
@@ -37,9 +40,10 @@ func NewStore(path string) *Store {
 	}
 
 	s := &Store{
-		data: make(map[string]string),
-		path: path,
-		log:  file,
+		data:    make(map[string]string),
+		path:    path,
+		log:     file,
+		logChan: make(chan string, 10000),
 	}
 
 	err = s.load()
@@ -49,7 +53,42 @@ func NewStore(path string) *Store {
 
 	go s.StartCompaction()
 
+	s.wg.Add(1)
+	go s.walFlusher()
+
 	return s
+}
+
+func (s *Store) walFlusher() {
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	defer s.wg.Done()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.flushLog()
+		case msg, ok := <-s.logChan:
+			if !ok {
+				s.flushLog()
+				return
+			}
+			if _, err := s.log.WriteString(msg); err != nil {
+				fmt.Println("Error writing to log:", err)
+			}
+		}
+	}
+
+}
+
+func (s *Store) flushLog() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.log.Sync(); err != nil {
+		fmt.Println("Error syncing log:", err)
+	}
 }
 
 func (s *Store) StartCompaction() {
@@ -64,6 +103,13 @@ func (s *Store) StartCompaction() {
 		if err := s.log.Truncate(0); err == nil {
 			s.log.Seek(0, 0)
 		}
+
+		freshMap := make(map[string]string, len(s.data))
+		for k, v := range s.data {
+			freshMap[k] = v
+		}
+
+		s.data = freshMap
 
 		s.mu.Unlock()
 	}
@@ -80,27 +126,31 @@ func (s *Store) Get(key string) (string, bool) {
 func (s *Store) Set(key, val string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data[key] = val
-	_, err := fmt.Fprintf(s.log, "SET|%s|%s\n", key, val)
 
-	if err != nil {
-		return err
+	if s.isClosed {
+		return fmt.Errorf("store is closed")
 	}
 
-	return s.log.Sync()
+	s.data[key] = val
+
+	s.logChan <- fmt.Sprintf("SET|%s|%s\n", key, val)
+
+	return nil
 }
 
 func (s *Store) Delete(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.data, key)
-	_, err := fmt.Fprintf(s.log, "DELETE|%s\n", key)
 
-	if err != nil {
-		return err
+	if s.isClosed {
+		return fmt.Errorf("store is closed")
 	}
 
-	return s.log.Sync()
+	delete(s.data, key)
+
+	s.logChan <- fmt.Sprintf("DELETE|%s\n", key)
+
+	return nil
 }
 
 func (s *Store) Snapshot() ([]byte, error) {
@@ -126,4 +176,27 @@ func (s *Store) ApplySnapshot(raw []byte) error {
 	s.savedAt = ff.Timestamp
 
 	return s.writeFile(raw)
+}
+
+func (s *Store) Close() error {
+
+	s.mu.Lock()
+	if s.isClosed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.isClosed = true
+	s.mu.Unlock()
+
+	close(s.logChan)
+
+	s.wg.Wait()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.log != nil {
+		return s.log.Close()
+	}
+	return nil
 }
