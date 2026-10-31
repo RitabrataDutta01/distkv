@@ -14,19 +14,32 @@ import (
 func RunNode(path1, path2 string) {
 	cfg, err := LoadConfig(path1)
 	if err != nil {
-		fmt.Printf("fatal: %v\n", err)
+		fmt.Printf("Fatal: failed to load config: %v\n", err)
 		return
 	}
 	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
-		fmt.Printf("fatal: %v\n", err)
+		fmt.Printf("Fatal: %v\n", err)
 		return
 	}
 
 	defer listener.Close()
 
-	snap := LoadSnap(path2)
-	SyncWithLeader(cfg.Leader, snap.store)
+	snap, err := LoadSnap(path2)
+	if err != nil {
+		fmt.Printf("Fatal: failed to load snapshot/WAL: %v\n", err)
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		SyncWithLeader(cfg.Leader, snap.store)
+		for range ticker.C {
+			SyncWithLeader(cfg.Leader, snap.store)
+		}
+	}()
 
 	for {
 		conn, err := listener.Accept()
@@ -65,8 +78,10 @@ func SyncWithLeader(leader string, st *store.Store) {
 
 	if strings.HasPrefix(resp, "SYNC_DATA|") {
 		if err := st.ApplySnapshot([]byte(strings.TrimPrefix(resp, "SYNC_DATA|"))); err != nil {
+			fmt.Printf("Error applying snapshot: %v", err)
 			return
 		}
+		fmt.Println("Snapshot applied successfully from leader.")
 	}
 }
 
@@ -80,9 +95,17 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	line, err := reader.ReadString('\n')
 	if err != nil || len(line) == 0 {
 
-		if errors.Is(err, io.EOF) && connLimit.N == 0 {
-			fmt.Fprintf(conn, "Payload too big, max payload size is 1MB\n")
-			return
+		if errors.Is(err, io.EOF) {
+			if connLimit.N == 0 {
+				fmt.Fprintf(conn, "Payload too big, max payload size is 1MB\n")
+				return
+			}
+			if len(line) == 0 {
+				fmt.Fprintf(conn, "No data received\n")
+				return
+			}
+		} else {
+			fmt.Fprintf(conn, "ERROR: failed to read request: %v\n", err)
 		}
 		return
 	}
@@ -100,14 +123,16 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 
 		val, ok := snap.store.Get(key)
 		if !ok {
+			fmt.Fprintf(conn, "ERROR: Key not found\n")
 			return
 		}
 		fmt.Fprintf(conn, "%s", val)
+		return
 	}
 
 	if method == "PUT" {
 		if len(fields) < 3 {
-			fmt.Printf("Error!! not enough arguments found\n")
+			fmt.Fprintf(conn, "ERROR: PUT request missing value\n")
 			return
 		}
 		key := fields[1]
@@ -115,25 +140,29 @@ func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 
 		err = snap.store.Set(key, val)
 		if err != nil {
-			fmt.Printf("fatal: %v\n", err)
+			fmt.Fprintf(conn, "ERROR: Store rejected PUT: %v\n", err)
 			return
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully set with value: %s", key, val)
 		}
+		return
 	}
 
 	if method == "DELETE" {
 		key := fields[1]
 		err := snap.store.Delete(key)
 		if err != nil {
-			fmt.Printf("fatal: %v\n", err)
+			fmt.Fprintf(conn, "ERROR: Store rejected DELETE: %v\n", err)
 			return
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
 		}
+		return
 	}
 
 	if method == "PING" {
 		fmt.Fprintf(conn, "PONG\n")
 	}
+
+	fmt.Fprintf(conn, "ERROR: Unknown method: %s\n", method)
 }

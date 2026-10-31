@@ -27,12 +27,18 @@ type pingResult struct {
 }
 
 type peerRegistry struct {
-	alive map[string]bool
-	mu    sync.RWMutex
+	alive    map[string]bool
+	reqChans map[string]chan string
+	mu       sync.RWMutex
 }
 
-func LoadSnap(path string) *Snap {
-	return &Snap{store: store.NewStore(path)}
+func LoadSnap(path string) (*Snap, error) {
+	st, err := store.NewStore(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Snap{store: st}, err
 }
 
 func Encoder(operand string) string {
@@ -114,61 +120,35 @@ func LoadConfig(path string) (*Config, error) {
 	return &conf, err
 }
 
-func ForwardToPeer(peer, method, key, val string) error {
-	addr := "127.0.0.1" + peer
-	timeout := 5 * time.Second
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			fmt.Println("Connection timeout:", err)
-		} else {
-			fmt.Println("Connection error:", err)
-		}
-		return err
-	}
+func ForwardToAllPeers(method, key, val string, peers []string, registry *peerRegistry) {
+	req := EncodeRequest(method, key, val)
 
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	var req string
-	req = EncodeRequest(method, key, val)
-	_, err = conn.Write([]byte(req))
-	return err
-}
-
-func ForwardToAllPeers(method, key, val string, peers []string, registry *peerRegistry) []string {
-	var failedPeers []string
-	resultChan := make(chan string, len(peers))
 	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 
 	for _, peer := range peers {
-		if !registry.alive[peer] {
-			resultChan <- ""
-			continue
-		}
-		go func(p string) {
-			err := ForwardToPeer(p, method, key, val)
 
-			if err != nil {
-				resultChan <- p
-			} else {
-				resultChan <- ""
+		if registry.alive[peer] {
+
+			select {
+			case registry.reqChans[peer] <- req:
+			default:
+				fmt.Printf("Warning: request channel for peer %s is full, skipping\n", peer)
 			}
-		}(peer)
-	}
-
-	registry.mu.RUnlock()
-
-	for i := 0; i < len(peers); i++ {
-		failedPeer := <-resultChan
-		if failedPeer != "" {
-			failedPeers = append(failedPeers, failedPeer)
-
-			registry.mu.Lock()
-			registry.alive[failedPeer] = false
-			registry.mu.Unlock()
 		}
 	}
-	return failedPeers
+}
+
+func ForwardRawToPeer(peer, req string) error {
+
+	addr := "127.0.0.1" + peer
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	_, err = conn.Write([]byte(req))
+	return err
 }

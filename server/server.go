@@ -14,27 +14,47 @@ import (
 func RunServer(path1, path2 string) {
 	cfg, err := LoadConfig(path1)
 	if err != nil {
+		fmt.Printf("Fatal: failed to load config: %v\n", err)
 		return
 	}
 
 	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
+		fmt.Printf("Fatal: %v\n", err)
 		return
 	}
 
 	defer listener.Close()
 
 	registry := &peerRegistry{
-		alive: make(map[string]bool),
+		alive:    make(map[string]bool),
+		reqChans: make(map[string]chan string),
 	}
 
 	for _, peer := range cfg.Peers {
 		registry.alive[peer] = true
+		registry.reqChans[peer] = make(chan string, 1000)
+
+		go func(p string, ch chan string) {
+			for req := range ch {
+
+				err := ForwardRawToPeer(p, req)
+				if err != nil {
+					registry.mu.Lock()
+					registry.alive[p] = false
+					registry.mu.Unlock()
+				}
+			}
+		}(peer, registry.reqChans[peer])
 	}
 
 	go healthCheckEngine(cfg.Peers, registry)
 
-	snap := LoadSnap(path2)
+	snap, err := LoadSnap(path2)
+	if err != nil {
+		fmt.Printf("Fatal: failed to load snapshot/WAL: %v\n", err)
+		return
+	}
 
 	for {
 		conn, err := listener.Accept()
@@ -122,11 +142,18 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string, registy 
 
 	line, err := reader.ReadString('\n')
 	if err != nil || len(line) == 0 {
-		if errors.Is(err, io.EOF) && connLimit.N == 0 {
-			fmt.Fprintf(conn, "Payload too big, max payload size is 1MB\n")
-			return
+		if errors.Is(err, io.EOF) {
+			if connLimit.N == 0 {
+				fmt.Fprintf(conn, "Payload too big, max payload size is 1MB\n")
+				return
+			}
+			if len(line) == 0 {
+				fmt.Fprintf(conn, "No data received\n")
+				return
+			}
+		} else {
+			fmt.Fprintf(conn, "ERROR: failed to read request: %v\n", err)
 		}
-
 		return
 	}
 	parts := DecodeRequest(line)
@@ -142,6 +169,7 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string, registy 
 
 		val, ok := snap.store.Get(key)
 		if !ok {
+			fmt.Fprintf(conn, "ERROR: Key not found\n")
 			return
 		}
 		fmt.Fprintf(conn, "%s", val)
@@ -158,32 +186,26 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string, registy 
 
 		err = snap.store.Set(key, val)
 		if err != nil {
+			fmt.Fprintf(conn, "ERROR: Store rejected PUT: %v\n", err)
 			return
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully set with value: %s", key, val)
 		}
-		go func() {
-			failedPeers := ForwardToAllPeers("PUT", key, val, peers, registy)
-			if len(failedPeers) > 0 {
-				fmt.Printf("Warning: Failed to replicate to peers: %v\n", failedPeers)
-			}
-		}()
+		ForwardToAllPeers("PUT", key, val, peers, registy)
+		return
 	}
 
 	if method == "DELETE" {
 		key := parts[1]
 		err := snap.store.Delete(key)
 		if err != nil {
+			fmt.Fprintf(conn, "ERROR: Store rejected DELETE: %v\n", err)
 			return
 		} else {
 			fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
 		}
-		go func() {
-			failedPeers := ForwardToAllPeers("DELETE", key, "", peers, registy)
-			if len(failedPeers) > 0 {
-				fmt.Printf("Warning: Failed to replicate to peers: %v\n", failedPeers)
-			}
-		}()
+		ForwardToAllPeers("DELETE", key, "", peers, registy)
+		return
 	}
 
 	if method == "SYNC" {
@@ -207,5 +229,6 @@ func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string, registy 
 		}
 		return
 	}
+	fmt.Fprintf(conn, "ERROR: Unknown method: %s\n", method)
 
 }

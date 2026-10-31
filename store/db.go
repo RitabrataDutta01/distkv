@@ -3,6 +3,7 @@ package store
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,10 +18,9 @@ type fileFormat struct {
 
 func (s *Store) save() error {
 
-	version := s.version + 1
 	ts := time.Now().UnixNano()
 	data, err := json.Marshal(fileFormat{
-		Version:   version,
+		Version:   s.version,
 		Timestamp: ts,
 		Data:      s.data,
 	})
@@ -33,7 +33,6 @@ func (s *Store) save() error {
 		return err
 	}
 
-	s.version = version
 	s.savedAt = ts
 	return nil
 
@@ -77,7 +76,9 @@ func (s *Store) load() error {
 	file, err := os.ReadFile(s.path)
 	if err == nil {
 		var ff fileFormat
-		if err := json.Unmarshal(file, &ff); err == nil {
+		if err := json.Unmarshal(file, &ff); err != nil {
+			return fmt.Errorf("corrupt snapshot file: %v", err)
+		} else {
 			if ff.Data == nil {
 				var legacy map[string]string
 				json.Unmarshal(file, &legacy)
@@ -87,6 +88,8 @@ func (s *Store) load() error {
 			s.version = ff.Version
 			s.savedAt = ff.Timestamp
 		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read snapshot: %v", err)
 	}
 
 	if s.data == nil {
@@ -98,13 +101,14 @@ func (s *Store) load() error {
 		if os.IsNotExist(err) {
 			return nil
 		}
+		return fmt.Errorf("failed to open WAL: %v", err)
 	}
 	defer lf.Close()
 
 	scanner := bufio.NewScanner(lf)
 
 	for scanner.Scan() {
-		parts := strings.Split(scanner.Text(), "|")
+		parts := decodeWAL(scanner.Text())
 
 		if len(parts) == 0 {
 			continue
@@ -118,4 +122,42 @@ func (s *Store) load() error {
 	}
 
 	return scanner.Err()
+}
+
+func decodeWAL(request string) []string {
+
+	request = strings.TrimSuffix(request, "\n")
+	var fields []string
+	var cur strings.Builder
+	escaped := false
+
+	for i := 0; i < len(request); i++ {
+		c := request[i]
+		switch {
+		case escaped:
+			switch c {
+			case 'n':
+				cur.WriteByte('\n')
+			case '|':
+				cur.WriteByte('|')
+			case '\\':
+				cur.WriteByte('\\')
+			default:
+				cur.WriteByte('\\')
+				cur.WriteByte(c)
+			}
+			escaped = false
+		case c == '\\':
+			escaped = true
+		case c == '|':
+			fields = append(fields, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if escaped {
+		cur.WriteByte('\\')
+	}
+	return append(fields, cur.String())
 }

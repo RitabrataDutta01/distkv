@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,11 +34,15 @@ func (s *Store) SavedAt() time.Time {
 	return time.Unix(0, s.savedAt)
 }
 
-func NewStore(path string) *Store {
+func NewStore(path string) (*Store, error) {
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, fmt.Errorf("Failed to create WAL directory: %v", err)
+	}
 
 	file, err := os.OpenFile(path+".log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		fmt.Println("Error opening log file:", err)
+		return nil, fmt.Errorf("error opening log file: %v", err)
 	}
 
 	s := &Store{
@@ -48,7 +54,7 @@ func NewStore(path string) *Store {
 
 	err = s.load()
 	if err != nil {
-		fmt.Println(err)
+		return nil, fmt.Errorf("error loading store: %v", err)
 	}
 
 	go s.StartCompaction()
@@ -56,7 +62,7 @@ func NewStore(path string) *Store {
 	s.wg.Add(1)
 	go s.walFlusher()
 
-	return s
+	return s, nil
 }
 
 func (s *Store) walFlusher() {
@@ -83,12 +89,11 @@ func (s *Store) walFlusher() {
 }
 
 func (s *Store) flushLog() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if err := s.log.Sync(); err != nil {
 		fmt.Println("Error syncing log:", err)
 	}
+
 }
 
 func (s *Store) StartCompaction() {
@@ -98,7 +103,10 @@ func (s *Store) StartCompaction() {
 	for range ticker.C {
 
 		s.mu.Lock()
-		s.save()
+		if err := s.save(); err != nil {
+			fmt.Println("Error during compaction:", err)
+			continue
+		}
 
 		if err := s.log.Truncate(0); err == nil {
 			s.log.Seek(0, 0)
@@ -125,30 +133,34 @@ func (s *Store) Get(key string) (string, bool) {
 
 func (s *Store) Set(key, val string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.isClosed {
 		return fmt.Errorf("store is closed")
 	}
 
 	s.data[key] = val
+	s.version++
 
-	s.logChan <- fmt.Sprintf("SET|%s|%s\n", key, val)
+	s.mu.Unlock()
+
+	s.logChan <- fmt.Sprintf("SET|%s|%s\n", encodeWAL(key), encodeWAL(val))
 
 	return nil
 }
 
 func (s *Store) Delete(key string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.isClosed {
 		return fmt.Errorf("store is closed")
 	}
 
 	delete(s.data, key)
+	s.version++
 
-	s.logChan <- fmt.Sprintf("DELETE|%s\n", key)
+	s.mu.Unlock()
+
+	s.logChan <- fmt.Sprintf("DELETE|%s\n", encodeWAL(key))
 
 	return nil
 }
@@ -199,4 +211,23 @@ func (s *Store) Close() error {
 		return s.log.Close()
 	}
 	return nil
+}
+
+func encodeWAL(operand string) string {
+	var sb strings.Builder
+
+	for i := 0; i < len(operand); i++ {
+		c := operand[i]
+		switch c {
+		case '\n':
+			sb.WriteString("\\n")
+		case '|':
+			sb.WriteString("\\|")
+		case '\\':
+			sb.WriteString("\\\\")
+		default:
+			sb.WriteByte(c)
+		}
+	}
+	return sb.String()
 }

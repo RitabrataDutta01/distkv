@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: distkv
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: distkv
+  template:
+    metadata:
+      labels:
+        app: distkv
+    spec:
+      containers:
+      - name: distkv
+        image: distkv:latest
+        imagePullPolicy: Never
+        command: ["/app/distkv-server"]
+        args: ["/app/server/config-primary.json"]
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/server
+      volumes:
+      - name: config-volume
+        configMap:
+          name: distkv-config
