@@ -44,12 +44,16 @@ The write path writes to a temporary file and renames it into place, which is a 
 
 On startup, load first reads the snapshot file if it exists. If it is valid, the data is restored into memory and the version/timestamp are set from the file.
 
-If the snapshot file doesn't exist, the code treats that as a normal empty store start. It then opens the WAL and replays any missed operations since the last snapshot.
+If the snapshot file doesn't exist, the code treats that as a normal empty store start. It then opens the WAL and replays every valid SET and DELETE record currently present. WAL records contain no snapshot version or timestamp, so replay is not filtered to operations known to follow the snapshot; replay updates data but does not increment the store version.
 
 This means the store can recover after a restart by combining:
 
 - the last compact snapshot
-- any later WAL entries
+- all valid records still present in the WAL
+
+Set and Delete enqueue records for a background writer and return without waiting for a file sync. The writer syncs periodically, so a sudden failure can lose recent acknowledged changes. Compaction also snapshots and truncates while WAL writes are managed by a separate goroutine; the implementation does not provide a transactional boundary between those steps.
+
+Applying a remote snapshot replaces the in-memory data and writes the snapshot file, but does not truncate the local WAL. On a later restart, the existing WAL is replayed over that snapshot and may restore older local mutations.
 
 ## WAL replay
 
@@ -66,8 +70,8 @@ During load, the system reads each WAL line and replays:
 
 The overall recovery strategy is deliberately simple:
 
-1. load the snapshot
-2. apply WAL changes after the snapshot
+1. load the snapshot, if present
+2. replay valid records currently present in the WAL
 3. continue serving requests
 
 This keeps the system easy to reason about while still providing durability between compaction cycles.

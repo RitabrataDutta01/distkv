@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?style=for-the-badge&logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.26.5%2B-00ADD8?style=for-the-badge&logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Protocol](https://img.shields.io/badge/Protocol-TCP%20%2B%20WAL-6A5ACD?style=for-the-badge)
 ![Status](https://img.shields.io/badge/Status-Learning%20Project-FFA500?style=for-the-badge)
@@ -15,7 +15,7 @@ A lightweight distributed key-value store built in Go to explore leader/follower
 
 - Stores values by key in a simple in-memory map
 - Runs a leader node that accepts writes
-- Replicates PUT and DELETE requests to healthy peers
+- Queues PUT and DELETE requests for peers currently marked healthy
 - Periodically checks peer health with TCP `PING` / `PONG`
 - Persists state using a write-ahead log and snapshot compaction
 - Recovers from disk on restart by replaying WAL data after the last snapshot
@@ -32,7 +32,7 @@ flowchart LR
     Replica2 --> StoreC
 ```
 
-The leader is the source of truth for writes. Followers keep their local store in sync by polling the leader and applying a snapshot when their version is behind.
+The leader is the intended source of truth for writes. Replication is best-effort: the leader queues mutations for peers without waiting for their acknowledgment, and a full peer queue can drop a mutation. Followers request a full snapshot from the leader at startup and every five seconds, which is the mechanism for reconciling missed updates. This is not consensus or strongly consistent replication. The current address handling is intended for local nodes: server code prepends `127.0.0.1` to configured peer and leader addresses.
 
 ## 📚 Documentation
 
@@ -63,7 +63,7 @@ The project is organized by code area:
 ├── snapshot/              # current snapshot files
 ├── Dockerfile             # container build definition
 ├── Makefile               # common task shortcuts
-├── distkv.yaml            # project config or example config
+├── distkv.yaml            # draft Kubernetes manifest; not compatible with current runtime as-is
 ├── go.mod                 # Go module definition
 ├── README.md              # this file
 └── .gitignore             # repo ignores
@@ -108,10 +108,12 @@ Each node reads a JSON config file.
 
 Fields:
 
-- `role` — node role such as `primary` or `replica`
+- `role` — use exactly `primary` for the leader; any other value starts a follower
 - `address` — TCP listen address for the node
-- `peers` — peers the leader will forward writes to
-- `leader` — leader address a follower uses for sync checks
+- `peers` — peer ports the leader will forward writes to (for example, `:8082`)
+- `leader` — leader port a follower uses for sync checks (for example, `:8081`)
+
+The checked-in `distkv.yaml` is a draft, not a supported deployment configuration: it uses role names the runtime does not treat as primary and hostnames that the current loopback-based address construction cannot connect to. The JSON files under `server/` are the working examples for the current implementation.
 
 ## 🔄 Sync and persistence model
 
@@ -131,16 +133,16 @@ Example:
 
 ### Replica sync flow
 
-On startup, a follower sends `SYNC|<version>` to the leader:
+On startup and every five seconds, a follower sends `SYNC|<version>` to the leader:
 
 1. The leader compares the follower version to its own.
 2. If versions match, it replies with `SYNC_OK`.
 3. If versions differ, it replies with `SYNC_DATA|<snapshot JSON>`.
-4. The follower applies the snapshot and becomes aligned with the leader.
+4. The follower applies the full snapshot. This reconciles data, but there is no incremental log transfer.
 
 ### WAL recovery
 
-The store keeps a write-ahead log for recent mutations. On restart, it loads the most recent snapshot and replays WAL entries written after that snapshot, preserving the latest state without losing recent writes.
+The store appends mutations to a buffered WAL and syncs that file in the background on a one-second interval. On restart, it loads the snapshot and replays every WAL record still present. WAL records do not carry versions, so replay changes the data without advancing the snapshot's version; recent mutations are also not guaranteed to have reached disk when an operation returns. Applying a leader snapshot does not clear a follower's WAL, so old local records may be replayed over the snapshot after a restart. Treat persistence as educational, not as a guarantee against abrupt process or machine failure.
 
 ## 🧵 Wire protocol
 
@@ -169,5 +171,5 @@ go test ./...
 
 ## ✅ Notes
 
-This project is intentionally small and educational: it focuses on core distributed systems ideas such as replication, persistence, versioning, and recovery rather than production-grade consensus or sharding.
+This project is intentionally small and educational: it focuses on core distributed systems ideas such as replication, persistence, versioning, and recovery rather than production-grade consensus, strong durability guarantees, or sharding.
 

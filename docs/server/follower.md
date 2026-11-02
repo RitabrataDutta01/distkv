@@ -29,7 +29,7 @@ The sync loop runs once immediately and then every five seconds. This ensures th
 
 This helper opens a TCP connection to the configured leader, sends a SYNC request with the follower's current version, and waits for the response.
 
-If the leader returns a snapshot payload, the follower calls ApplySnapshot on its local store. This overwrites its local state with the leader's current data and persists the snapshot to disk.
+If the leader returns a snapshot payload, the follower calls ApplySnapshot on its local store. This overwrites its in-memory state and persists the snapshot to disk, but does not truncate the follower's WAL. Existing follower WAL records can therefore be replayed over the snapshot after a later restart.
 
 This keeps follower state close to leader state without needing a full rewrite of the replication protocol.
 

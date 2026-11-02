@@ -55,7 +55,7 @@ The leader and follower both rely on this format for request handling and peer r
 
 ### DecodeRequest
 
-DecodeRequest reverses the encoding and produces a slice of fields. It is used both for network traffic and for WAL parsing logic in the store package.
+DecodeRequest reverses the network encoding and produces a slice of fields. WAL parsing is implemented separately by `decodeWAL` in the store package, using equivalent escaping rules.
 
 ## Config and store bootstrapping
 
@@ -71,11 +71,11 @@ This reads the JSON config file and unmarshals it into the Config struct.
 
 ### ForwardToAllPeers
 
-This sends a mutation to all healthy peers listed in the registry. It does so by putting each encoded request on that peer's channel. If a channel is full, the function drops the request with a warning instead of blocking the process.
+This queues a mutation for peers currently marked healthy in the registry. It does so by putting each encoded request on that peer's channel. If a channel is full, the function drops the request with a warning instead of blocking the process; it does not wait for a peer acknowledgment.
 
 ### ForwardRawToPeer
 
-This helper opens a TCP connection to a specific peer and writes a prebuilt request payload directly to it. This is used by the background goroutine created in RunServer.
+This helper opens a TCP connection to a specific peer and writes a prebuilt request payload directly to it. This is used by the background goroutine created in RunServer. The current server constructs peer addresses by prefixing `127.0.0.1`, so configured peer values are expected to be local port suffixes such as `:8082`, not hostnames.
 
 ## Why this matters
 

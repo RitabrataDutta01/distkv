@@ -47,17 +47,17 @@ This is the lifecycle for an active store instance.
 
 ### walFlusher
 
-This goroutine runs on a one-second ticker and calls flushLog periodically. It also handles queued WAL writes from the log channel. The purpose is to ensure log writes reach disk and are not lost during a crash.
+This goroutine writes queued WAL records as they arrive and calls flushLog on a one-second ticker. Set and Delete enqueue records but return before the background writer necessarily writes or syncs them, so an abrupt failure can lose recent acknowledged mutations.
 
 ### flushLog
 
-This forces the WAL file to sync with disk. It is the direct durability call used by the background logger.
+This asks the operating system to sync the WAL file with disk. It is called by the background logger, not synchronously by each Set or Delete.
 
 ## Compaction
 
 ### StartCompaction
 
-This goroutine runs every five minutes. It writes a snapshot, then truncates the WAL so the log does not grow forever.
+This goroutine runs every five minutes. It writes a snapshot, then truncates the WAL so the log does not grow forever. WAL appends are handled by a separate goroutine, so this is not a transactional snapshot-and-log boundary.
 
 This is how the project keeps storage bounded while preserving a recoverable history.
 
@@ -87,7 +87,7 @@ Replaces the local in-memory map with the incoming remote snapshot and writes it
 
 ### Close
 
-Close prevents new writes, closes the log channel, waits for background workers to finish, and closes the WAL file. This is the clean stop path for the store.
+Close prevents new writes, closes the log channel, waits for the WAL writer to flush, and closes the WAL file. The server entrypoints do not currently wire process shutdown to Store.Close.
 
 ## Why the design works
 

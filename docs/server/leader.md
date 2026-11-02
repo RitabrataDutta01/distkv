@@ -31,7 +31,7 @@ Each configured peer gets:
 - a request channel
 - a goroutine that consumes queued requests and forwards them to that peer
 
-If forwarding fails, the peer is marked dead in the registry.
+If forwarding fails, the peer is marked dead in the registry. A health check also runs immediately and then once per minute.
 
 Then the leader starts a background health-check loop and loads the snapshot/WAL state from disk. After that, it accepts incoming TCP connections and handles each one in its own goroutine.
 
@@ -39,7 +39,7 @@ Then the leader starts a background health-check loop and loads the snapshot/WAL
 
 ### healthCheckEngine
 
-This loop calls healthCheck once immediately and then every minute. The result is written into the registry so that the leader knows which peers are currently healthy enough to receive forwarded writes.
+This loop calls healthCheck once immediately and then every minute. The result is written into the registry and controls which peers are eligible for queued writes. A successful PING only establishes reachability at that moment; it does not guarantee that a later mutation will be applied.
 
 ### writeReg
 
@@ -70,7 +70,7 @@ The leader fetches the key from the local store. If it is missing, it responds w
 
 ### PUT flow
 
-The leader validates that the request includes both a key and a value. After writing to the local store, it forwards the mutation to all healthy peers using ForwardToAllPeers, then returns a success message to the client.
+The leader validates that the request includes both a key and a value. After writing to the local store, it enqueues the mutation for peers currently marked healthy using ForwardToAllPeers, then returns a success message to the client. Peer delivery is asynchronous and unacknowledged; a full request queue drops the mutation. Followers' periodic full-snapshot sync is the available repair path.
 
 ### DELETE flow
 
@@ -82,4 +82,4 @@ When a follower or node asks for synchronization, the leader compares the provid
 
 ## Important design point
 
-The leader is the write authority. It mutates local state first, then propagates the same mutation to other peers. This keeps the cluster behavior consistent and makes the store version a useful synchronization marker.
+The leader is intended to be the write authority. It mutates local state first, then attempts best-effort propagation. This is not consensus or strongly consistent replication. Version comparison can trigger a full snapshot, but it does not provide incremental WAL replication.
