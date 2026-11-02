@@ -2,4 +2,3 @@ snapshot/
 coverage.out
 coverage.html
 .idea/
-bot.go

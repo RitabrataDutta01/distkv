@@ -1,0 +1,73 @@
+# Store persistence and recovery
+
+This document covers the snapshot and WAL helper logic in store/db.go.
+
+## Recovery flow
+
+```mermaid
+flowchart TD
+    A[Startup] --> B[Read snapshot]
+    B --> C{Snapshot exists?}
+    C -->|Yes| D[Restore state]
+    C -->|No| E[Start empty]
+    D --> F[Open WAL]
+    E --> F
+    F --> G[Replay SET and DELETE records]
+    G --> H[Store ready]
+```
+
+## Snapshot file format
+
+### fileFormat
+
+The snapshot format is a JSON object with:
+
+- Version
+- Timestamp
+- Data
+
+The Data field is a map of string key/value pairs. This is the on-disk representation of the current store state.
+
+## Saving state
+
+### save
+
+This method creates a timestamp, serializes the current store as JSON, and writes it to the snapshot file. It is called as part of compaction.
+
+### writeFile
+
+The write path writes to a temporary file and renames it into place, which is a standard atomic-write pattern. This reduces the risk of leaving a half-written snapshot behind after a crash.
+
+## Loading state on startup
+
+### load
+
+On startup, load first reads the snapshot file if it exists. If it is valid, the data is restored into memory and the version/timestamp are set from the file.
+
+If the snapshot file doesn't exist, the code treats that as a normal empty store start. It then opens the WAL and replays any missed operations since the last snapshot.
+
+This means the store can recover after a restart by combining:
+
+- the last compact snapshot
+- any later WAL entries
+
+## WAL replay
+
+### decodeWAL
+
+This helper decodes a WAL row back into fields. It uses the same escaping rules as the network protocol so values containing pipes, backslashes, or newlines remain intact.
+
+During load, the system reads each WAL line and replays:
+
+- SET operations by writing a key/value pair into memory
+- DELETE operations by removing the key from memory
+
+## Recovery model
+
+The overall recovery strategy is deliberately simple:
+
+1. load the snapshot
+2. apply WAL changes after the snapshot
+3. continue serving requests
+
+This keeps the system easy to reason about while still providing durability between compaction cycles.

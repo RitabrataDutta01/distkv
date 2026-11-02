@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// Store is the durable key/value state for a node.
+// It keeps the in-memory map, appends mutation records to a WAL, and can compact snapshots on a timer.
 type Store struct {
 	data     map[string]string
 	mu       sync.RWMutex
@@ -22,18 +24,21 @@ type Store struct {
 	isClosed bool
 }
 
+// Version returns the current mutation count for the store.
 func (s *Store) Version() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.version
 }
 
+// SavedAt returns when the store was last snapshotted.
 func (s *Store) SavedAt() time.Time {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return time.Unix(0, s.savedAt)
 }
 
+// NewStore initializes a store from disk and starts the WAL-flush and compaction background workers.
 func NewStore(path string) (*Store, error) {
 
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -65,6 +70,7 @@ func NewStore(path string) (*Store, error) {
 	return s, nil
 }
 
+// walFlusher periodically flushes buffered log writes to disk so recent mutations survive crashes.
 func (s *Store) walFlusher() {
 
 	ticker := time.NewTicker(1 * time.Second)
@@ -88,6 +94,7 @@ func (s *Store) walFlusher() {
 
 }
 
+// flushLog forces the WAL file contents to disk.
 func (s *Store) flushLog() {
 
 	if err := s.log.Sync(); err != nil {
@@ -96,6 +103,7 @@ func (s *Store) flushLog() {
 
 }
 
+// StartCompaction periodically snapshots the state and truncates the WAL to keep it bounded over time.
 func (s *Store) StartCompaction() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -124,6 +132,7 @@ func (s *Store) StartCompaction() {
 
 }
 
+// Get fetches a value for the given key and reports whether it exists.
 func (s *Store) Get(key string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -131,6 +140,7 @@ func (s *Store) Get(key string) (string, bool) {
 	return val, ok
 }
 
+// Set writes a value, increments the version, and appends the mutation to the WAL.
 func (s *Store) Set(key, val string) error {
 	s.mu.Lock()
 
@@ -148,6 +158,7 @@ func (s *Store) Set(key, val string) error {
 	return nil
 }
 
+// Delete removes a key, increments the version, and persists the removal to the WAL.
 func (s *Store) Delete(key string) error {
 	s.mu.Lock()
 
@@ -165,6 +176,7 @@ func (s *Store) Delete(key string) error {
 	return nil
 }
 
+// Snapshot serializes the current state as JSON for leader/follower synchronization.
 func (s *Store) Snapshot() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -175,6 +187,7 @@ func (s *Store) Snapshot() ([]byte, error) {
 	})
 }
 
+// ApplySnapshot replaces the in-memory state with a remote snapshot and writes it to disk.
 func (s *Store) ApplySnapshot(raw []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -190,6 +203,7 @@ func (s *Store) ApplySnapshot(raw []byte) error {
 	return s.writeFile(raw)
 }
 
+// Close shuts down the WAL worker and closes the log file cleanly.
 func (s *Store) Close() error {
 
 	s.mu.Lock()
@@ -213,6 +227,7 @@ func (s *Store) Close() error {
 	return nil
 }
 
+// encodeWAL escapes pipe and newline characters so they can be safely stored in the WAL format.
 func encodeWAL(operand string) string {
 	var sb strings.Builder
 

@@ -11,12 +11,15 @@ import (
 	"time"
 )
 
+// Config describes the cluster settings loaded from the server configuration file.
 type Config struct {
 	Role   string   `json:"role"`
 	Addr   string   `json:"address"`
 	Peers  []string `json:"peers"`
 	Leader string   `json:"leader"`
 }
+
+// Snap wraps a persistent store for a node and gives the server code a common state handle.
 type Snap struct {
 	store *store.Store
 }
@@ -32,6 +35,7 @@ type peerRegistry struct {
 	mu       sync.RWMutex
 }
 
+// LoadSnap creates the in-memory snapshot-backed store used by a node or leader.
 func LoadSnap(path string) (*Snap, error) {
 	st, err := store.NewStore(path)
 	if err != nil {
@@ -41,6 +45,7 @@ func LoadSnap(path string) (*Snap, error) {
 	return &Snap{store: st}, err
 }
 
+// Encoder escapes special characters so request fields remain parseable across the wire protocol.
 func Encoder(operand string) string {
 	var sb strings.Builder
 	oplength := len(operand)
@@ -60,6 +65,7 @@ func Encoder(operand string) string {
 	return sb.String()
 }
 
+// EncodeRequest serializes a request into the compact pipe-delimited format used by the server protocol.
 func EncodeRequest(method, key, val string) string {
 	if method != "PUT" {
 		return method + "|" + Encoder(key) + "\n"
@@ -68,6 +74,7 @@ func EncodeRequest(method, key, val string) string {
 	}
 }
 
+// DecodeRequest reverses the wire encoding and splits a request into its logical fields.
 func DecodeRequest(request string) []string {
 	request = strings.TrimSuffix(request, "\n")
 	var fields []string
@@ -104,6 +111,8 @@ func DecodeRequest(request string) []string {
 	}
 	return append(fields, cur.String())
 }
+
+// LoadConfig reads and unmarshals the JSON config file used to bootstrap the node.
 func LoadConfig(path string) (*Config, error) {
 	file, err := os.ReadFile(path)
 	if err != nil {
@@ -120,6 +129,7 @@ func LoadConfig(path string) (*Config, error) {
 	return &conf, err
 }
 
+// ForwardToAllPeers sends a mutation to all known healthy peers using the registry's request queue.
 func ForwardToAllPeers(method, key, val string, peers []string, registry *peerRegistry) {
 	req := EncodeRequest(method, key, val)
 
@@ -139,6 +149,7 @@ func ForwardToAllPeers(method, key, val string, peers []string, registry *peerRe
 	}
 }
 
+// ForwardRawToPeer delivers a pre-encoded request directly to a peer address over TCP.
 func ForwardRawToPeer(peer, req string) error {
 
 	addr := "127.0.0.1" + peer

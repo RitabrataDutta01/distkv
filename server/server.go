@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+// RunServer starts the leader node for the cluster.
+// It loads the config and snapshot state, watches peer health, and accepts client requests.
 func RunServer(path1, path2 string) {
 	cfg, err := LoadConfig(path1)
 	if err != nil {
@@ -68,6 +70,7 @@ func RunServer(path1, path2 string) {
 	}
 }
 
+// healthCheckEngine continuously polls peers and updates the registry with the current health state.
 func healthCheckEngine(peers []string, registry *peerRegistry) {
 
 	healthy, dead := healthCheck(peers)
@@ -81,6 +84,7 @@ func healthCheckEngine(peers []string, registry *peerRegistry) {
 	}
 }
 
+// writeReg updates the peer registry with the latest set of healthy and dead peers.
 func writeReg(registry *peerRegistry, healthy []string, dead []string) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -92,6 +96,7 @@ func writeReg(registry *peerRegistry, healthy []string, dead []string) {
 	}
 }
 
+// healthCheck probes each peer and returns the slices of peers that are currently healthy or unreachable.
 func healthCheck(peers []string) ([]string, []string) {
 	var healthy, dead []string
 	resultChan := make(chan pingResult, len(peers))
@@ -133,6 +138,7 @@ func healthCheck(peers []string) ([]string, []string) {
 	return healthy, dead
 }
 
+// HandleLeaderConnection serves requests from clients and forwards mutations to follower peers.
 func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string, registy *peerRegistry) {
 	defer conn.Close()
 

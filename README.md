@@ -1,81 +1,77 @@
-# distkv
+# DistKV
 
-A distributed key-value store built in Go as a learning project for concurrency and distributed systems concepts.
+<div align="center">
 
-## Status
+![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?style=for-the-badge&logo=go&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+![Protocol](https://img.shields.io/badge/Protocol-TCP%20%2B%20WAL-6A5ACD?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Learning%20Project-FFA500?style=for-the-badge)
 
-Phase 4 — versioned snapshots with replica catch-up on startup. A leader node accepts client requests and forwards mutations to replicas. Each node persists its own versioned JSON snapshot; on startup a replica compares its snapshot version against the leader's and, on mismatch, pulls the leader's full state so it comes back in sync after downtime.
+</div>
 
-## Features
+A lightweight distributed key-value store built in Go to explore leader/follower replication, TCP networking, versioned snapshots, and durable recovery.
 
-- **Get / Set / Delete** — core KV operations
-- **Raw TCP wire protocol** — newline-framed `METHOD|key|val\n` requests with escaping of `|`, `\`, and newline in keys/values
-- **Leader–replica replication** — leader forwards PUT/DELETE to all configured peers
-- **Versioned snapshots** — every save stores a monotonic `version` and `timestamp` alongside the data
-- **Replica startup sync** — replicas ping the leader on boot and download a full snapshot on version mismatch
-- **Crash-safe persistence** — atomic temp-file + rename writes with fsync
-- **Concurrent-safe** — `sync.RWMutex` (shared reads, exclusive writes)
-- **Config-driven roles** — JSON config determines primary vs replica behavior
+## ✨ What this project does
 
-## Project layout
+- Stores values by key in a simple in-memory map
+- Runs a leader node that accepts writes
+- Replicates PUT and DELETE requests to healthy peers
+- Periodically checks peer health with TCP `PING` / `PONG`
+- Persists state using a write-ahead log and snapshot compaction
+- Recovers from disk on restart by replaying WAL data after the last snapshot
 
-```
-store/store.go      — core KV store: Get/Set/Delete, Version/SavedAt, Snapshot/ApplySnapshot
-store/db.go         — snapshot save/load (JSON, atomic write, fsync) and writeFile helper
-server/helpers.go   — Config, Snap, LoadConfig, ForwardToPeer, ForwardToAllPeers, Encoder/EncodeRequest/DecodeRequest
-server/server.go    — leader TCP server (RunServer, HandleLeaderConnection, SYNC handler)
-server/nodes.go     — replica TCP server (RunNode, HandleNodeConnection, SyncWithLeader)
-server/config-*.json — per-node config files
-cmd/server/         — server binary; reads config path from CLI arg
-cmd/distkv/         — test harness (starts server, runs TCP tests)
-snapshot/           — per-node on-disk snapshots (gitignored)
-```
+## 🏗️ Architecture
 
-## Snapshot format
-
-Each node persists a single JSON file per run, e.g. `snapshot/8081.json`:
-
-```json
-{"version":2,"timestamp":1785735782610875224,"data":{"/color":"blue","/animal":"dog"}}
+```mermaid
+flowchart LR
+    Client --> Leader
+    Leader --> StoreA
+    Leader --> Replica1
+    Leader --> Replica2
+    Replica1 --> StoreB
+    Replica2 --> StoreC
 ```
 
-- `version` — monotonic counter, bumped on every successful write
-- `timestamp` — unix nanoseconds of the last successful save
-- `data` — the key/value map
+The leader is the source of truth for writes. Followers keep their local store in sync by polling the leader and applying a snapshot when their version is behind.
 
-Legacy flat-map snapshots (no `version`/`data` keys) are detected and loaded automatically as version 0.
+## 📚 Documentation
 
-## Replica sync flow
+The project is organized by code area:
 
-On startup a replica (`RunNode`) sends `SYNC|<version>` to its leader:
+- [docs/cluster-overview.md](docs/cluster-overview.md) — documentation index
+- [docs/server/leader.md](docs/server/leader.md) — leader lifecycle and request flow
+- [docs/server/follower.md](docs/server/follower.md) — follower startup and sync flow
+- [docs/server/helpers.md](docs/server/helpers.md) — config, protocol, and peer forwarding helpers
+- [docs/store/core.md](docs/store/core.md) — main store implementation
+- [docs/store/persistence.md](docs/store/persistence.md) — WAL and snapshot persistence
 
-1. The leader compares the replica's version with its own.
-2. **Equal** → replies `SYNC_OK`; nothing to do.
-3. **Mismatch** → replies `SYNC_DATA|<snapshot JSON>`; the replica applies it via `ApplySnapshot`, overwriting its local state and keeping the leader's exact version/timestamp.
+## 🗂️ Repository layout
 
-The leader is authoritative: any mismatch (even if the replica's version is higher) results in the replica copying the leader's state.
+```text
+.
+├── cmd/
+│   └── server/            # CLI entrypoints for server processes
+├── docs/                  # grouped project documentation
+├── server/
+│   ├── server.go          # leader logic and health checks
+│   ├── nodes.go           # follower sync and handling
+│   ├── helpers.go         # config + request protocol helpers
+│   └── config-*.json     # per-node config files
+├── store/
+│   ├── store.go           # key/value store logic
+│   └── db.go              # snapshot + WAL persistence helpers
+├── snapshot/              # current snapshot files
+├── Dockerfile             # container build definition
+├── Makefile               # common task shortcuts
+├── distkv.yaml            # project config or example config
+├── go.mod                 # Go module definition
+├── README.md              # this file
+└── .gitignore             # repo ignores
+```
 
-## Wire protocol
+## 🚀 Quick start
 
-Requests are newline-terminated and pipe-delimited. A field containing `|`, a backslash, or a newline is escaped on the wire:
-
-| raw | wire |
-|-----|------|
-| `|`  | `\|` |
-| `\`  | `\\` |
-| newline | `\n` (backslash + letter `n`) |
-
-Frame: `METHOD|key|value\n`
-
-- **PUT** — 3 fields: `PUT|/color|blue\n`
-- **GET / DELETE** — 2 fields: `GET|/color\n`, `DELETE|/color\n`
-- **SYNC** — 2 fields: `SYNC|<version>\n`
-
-The receiver trims a trailing newline and unescapes fields. The trailing `\n` is optional in practice — a request followed by connection close (as sent by `nc`) is accepted too. Responses are plain text and are not escaped.
-
-## Usage (cluster)
-
-In separate terminals:
+Start the leader and replicas in separate terminals:
 
 ```bash
 go run ./cmd/server/ server/config-primary.json
@@ -83,23 +79,23 @@ go run ./cmd/server/ server/config-replica1.json
 go run ./cmd/server/ server/config-replica2.json
 ```
 
-Then interact with the leader:
+Then interact with the leader over TCP:
 
 ```bash
 printf "PUT|/color|blue\n" | nc localhost 8081
-printf "GET|/color\n"      | nc localhost 8081
-printf "DELETE|/color\n"   | nc localhost 8081
+printf "GET|/color\n"     | nc localhost 8081
+printf "DELETE|/color\n"  | nc localhost 8081
 ```
 
-Verify replication — same GET on a replica should return the value:
+Check a replica:
 
 ```bash
 printf "GET|/color\n" | nc localhost 8082
 ```
 
-## Configuration
+## ⚙️ Configuration
 
-Each node reads a JSON config file. Example replica config:
+Each node reads a JSON config file.
 
 ```json
 {
@@ -110,13 +106,68 @@ Each node reads a JSON config file. Example replica config:
 }
 ```
 
-- `role` — `primary` or `replica`; determines whether the node runs the leader or replica server
-- `address` — listen address for this node
-- `peers` — addresses the leader forwards mutations to (replicas list the primary here too)
-- `leader` — primary address that replicas ping for startup sync (only used on replicas)
+Fields:
 
-## Run tests
+- `role` — node role such as `primary` or `replica`
+- `address` — TCP listen address for the node
+- `peers` — peers the leader will forward writes to
+- `leader` — leader address a follower uses for sync checks
+
+## 🔄 Sync and persistence model
+
+### Snapshot format
+
+Each node stores a JSON snapshot with:
+
+- `version` — current mutation count
+- `timestamp` — last snapshot time in nanoseconds
+- `data` — key/value map
+
+Example:
+
+```json
+{"version":2,"timestamp":1785735782610875224,"data":{"/color":"blue","/animal":"dog"}}
+```
+
+### Replica sync flow
+
+On startup, a follower sends `SYNC|<version>` to the leader:
+
+1. The leader compares the follower version to its own.
+2. If versions match, it replies with `SYNC_OK`.
+3. If versions differ, it replies with `SYNC_DATA|<snapshot JSON>`.
+4. The follower applies the snapshot and becomes aligned with the leader.
+
+### WAL recovery
+
+The store keeps a write-ahead log for recent mutations. On restart, it loads the most recent snapshot and replays WAL entries written after that snapshot, preserving the latest state without losing recent writes.
+
+## 🧵 Wire protocol
+
+Requests are newline-terminated and pipe-delimited. Special characters are escaped so they survive transport and storage cleanly.
+
+| Raw value | On the wire |
+|-----------|-------------|
+| `|` | `\|` |
+| `\` | `\\` |
+| newline | `\n` |
+
+Example frames:
+
+- `PUT|/color|blue\n`
+- `GET|/color\n`
+- `DELETE|/color\n`
+- `SYNC|42\n`
+
+## 🧪 Testing
+
+To run the Go test suite:
 
 ```bash
-go run -race ./cmd/distkv/
+go test ./...
 ```
+
+## ✅ Notes
+
+This project is intentionally small and educational: it focuses on core distributed systems ideas such as replication, persistence, versioning, and recovery rather than production-grade consensus or sharding.
+

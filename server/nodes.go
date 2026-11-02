@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// RunNode starts a follower node that syncs with the leader and serves local requests.
 func RunNode(path1, path2 string) {
 	cfg, err := LoadConfig(path1)
 	if err != nil {
@@ -53,6 +54,7 @@ func RunNode(path1, path2 string) {
 	}
 }
 
+// SyncWithLeader asks the leader for the latest snapshot when a follower falls behind.
 func SyncWithLeader(leader string, st *store.Store) {
 	addr := "127.0.0.1" + leader
 	timeout := 5 * time.Second
@@ -85,6 +87,7 @@ func SyncWithLeader(leader string, st *store.Store) {
 	}
 }
 
+// HandleNodeConnection handles incoming requests for a follower node, including GET/PUT/DELETE and health checks.
 func (snap *Snap) HandleNodeConnection(conn net.Conn) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))

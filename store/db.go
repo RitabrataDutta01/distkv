@@ -10,12 +10,14 @@ import (
 	"time"
 )
 
+// fileFormat is the on-disk JSON schema used for snapshots and compaction checkpoints.
 type fileFormat struct {
 	Version   int               `json:"version"`
 	Timestamp int64             `json:"timestamp"`
 	Data      map[string]string `json:"data"`
 }
 
+// save persists the current store state as a compact snapshot file.
 func (s *Store) save() error {
 
 	ts := time.Now().UnixNano()
@@ -38,6 +40,7 @@ func (s *Store) save() error {
 
 }
 
+// writeFile writes a snapshot atomically to a temporary file and then renames it in place.
 func (s *Store) writeFile(data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
 		return err
@@ -72,6 +75,7 @@ func (s *Store) writeFile(data []byte) error {
 
 }
 
+// load restores the store from the snapshot file and replays any WAL entries that happened afterward.
 func (s *Store) load() error {
 	file, err := os.ReadFile(s.path)
 	if err == nil {
@@ -124,6 +128,7 @@ func (s *Store) load() error {
 	return scanner.Err()
 }
 
+// decodeWAL parses a WAL record into its fields while honoring the same escaping rules as the network protocol.
 func decodeWAL(request string) []string {
 
 	request = strings.TrimSuffix(request, "\n")
