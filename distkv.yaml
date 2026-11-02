@@ -1,9 +1,33 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: distkv-svc
+spec:
+  clusterIP: None
+  selector:
+    app: distkv
+  ports:
+  - port: 8081
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: distkv-config
+data:
+  config-distkv-0.json: |
+    {"role": "leader", "address": "0.0.0.0:8081", "peers": ["distkv-1.distkv-svc.default.svc.cluster.local:8081", "distkv-2.distkv-svc.default.svc.cluster.local:8081"]}
+  config-distkv-1.json: |
+    {"role": "follower", "address": "0.0.0.0:8081", "leader": "distkv-0.distkv-svc.default.svc.cluster.local:8081", "peers": []}
+  config-distkv-2.json: |
+    {"role": "follower", "address": "0.0.0.0:8081", "leader": "distkv-0.distkv-svc.default.svc.cluster.local:8081", "peers": []}
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: distkv
 spec:
-  replicas: 1
+  serviceName: distkv-svc
+  replicas: 3
   selector:
     matchLabels:
       app: distkv
@@ -16,14 +40,25 @@ spec:
       - name: distkv
         image: distkv:latest
         imagePullPolicy: Never
-        command: ["/app/distkv-server"]
-        args: ["/app/server/config-primary.json"]
+        command: ["sh", "-c"]
+        # Adjust 'main' to match whatever your compiled Go binary is named
+        args: ["/app/distkv-server /app/server/config-${HOSTNAME}.json /app/snapshot/data"]
         ports:
-        - containerPort: 8080
+        - containerPort: 8081
         volumeMounts:
         - name: config-volume
           mountPath: /app/server
+        - name: data-volume
+          mountPath: /app/snapshot
       volumes:
       - name: config-volume
         configMap:
           name: distkv-config
+  volumeClaimTemplates:
+  - metadata:
+      name: data-volume
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi

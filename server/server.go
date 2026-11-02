@@ -135,100 +135,102 @@ func healthCheck(peers []string) ([]string, []string) {
 
 func (snap *Snap) HandleLeaderConnection(conn net.Conn, peers []string, registy *peerRegistry) {
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	connLimit := io.LimitedReader{R: conn, N: 1 << 20}
 	reader := bufio.NewReader(&connLimit)
 
-	line, err := reader.ReadString('\n')
-	if err != nil || len(line) == 0 {
-		if errors.Is(err, io.EOF) {
-			if connLimit.N == 0 {
-				fmt.Fprintf(conn, "Payload too big, max payload size is 1MB\n")
-				return
+	for {
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+		line, err := reader.ReadString('\n')
+		if err != nil || len(line) == 0 {
+			if errors.Is(err, io.EOF) {
+				if connLimit.N == 0 {
+					fmt.Fprintf(conn, "Payload too big, max payload size is 1MB\n")
+					return
+				}
+				if len(line) == 0 {
+					fmt.Fprintf(conn, "No data received\n")
+					return
+				}
+			} else {
+				fmt.Fprintf(conn, "ERROR: failed to read request: %v\n", err)
 			}
-			if len(line) == 0 {
-				fmt.Fprintf(conn, "No data received\n")
-				return
-			}
-		} else {
-			fmt.Fprintf(conn, "ERROR: failed to read request: %v\n", err)
-		}
-		return
-	}
-	parts := DecodeRequest(line)
-	if len(parts) < 2 {
-		fmt.Fprintf(conn, "ERROR: Invalid request format\n")
-		return
-	}
-
-	method := parts[0]
-
-	if method == "GET" {
-		key := parts[1]
-
-		val, ok := snap.store.Get(key)
-		if !ok {
-			fmt.Fprintf(conn, "ERROR: Key not found\n")
 			return
 		}
-		fmt.Fprintf(conn, "%s", val)
-	}
-
-	if method == "PUT" {
-		if len(parts) < 3 {
-			fmt.Fprintf(conn, "ERROR: PUT request missing value\n")
-			return
-		}
-
-		key := parts[1]
-		val := parts[2]
-
-		err = snap.store.Set(key, val)
-		if err != nil {
-			fmt.Fprintf(conn, "ERROR: Store rejected PUT: %v\n", err)
-			return
-		} else {
-			fmt.Fprintf(conn, "Key: %s succesfully set with value: %s", key, val)
-		}
-		ForwardToAllPeers("PUT", key, val, peers, registy)
-		return
-	}
-
-	if method == "DELETE" {
-		key := parts[1]
-		err := snap.store.Delete(key)
-		if err != nil {
-			fmt.Fprintf(conn, "ERROR: Store rejected DELETE: %v\n", err)
-			return
-		} else {
-			fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
-		}
-		ForwardToAllPeers("DELETE", key, "", peers, registy)
-		return
-	}
-
-	if method == "SYNC" {
+		parts := DecodeRequest(line)
 		if len(parts) < 2 {
-			fmt.Fprintf(conn, "ERROR: SYNC request missing version\n")
+			fmt.Fprintf(conn, "ERROR: Invalid request format\n")
 			return
 		}
-		nodeVersion, err := strconv.Atoi(parts[1])
-		if err != nil {
-			fmt.Fprintf(conn, "ERROR: invalid SYNC version\n")
-			return
-		}
-		if nodeVersion == snap.store.Version() {
-			fmt.Fprintf(conn, "SYNC_OK\n")
-		} else {
-			snapJSON, err := snap.store.Snapshot()
-			if err != nil {
+
+		method := parts[0]
+
+		if method == "GET" {
+			key := parts[1]
+
+			val, ok := snap.store.Get(key)
+			if !ok {
+				fmt.Fprintf(conn, "ERROR: Key not found\n")
 				return
 			}
-			fmt.Fprintf(conn, "SYNC_DATA|%s\n", snapJSON)
+			fmt.Fprintf(conn, "%s", val)
 		}
-		return
-	}
-	fmt.Fprintf(conn, "ERROR: Unknown method: %s\n", method)
 
+		if method == "PUT" {
+			if len(parts) < 3 {
+				fmt.Fprintf(conn, "ERROR: PUT request missing value\n")
+				return
+			}
+
+			key := parts[1]
+			val := parts[2]
+
+			err = snap.store.Set(key, val)
+			if err != nil {
+				fmt.Fprintf(conn, "ERROR: Store rejected PUT: %v\n", err)
+				return
+			} else {
+				fmt.Fprintf(conn, "Key: %s succesfully set with value: %s", key, val)
+			}
+			ForwardToAllPeers("PUT", key, val, peers, registy)
+			return
+		}
+
+		if method == "DELETE" {
+			key := parts[1]
+			err := snap.store.Delete(key)
+			if err != nil {
+				fmt.Fprintf(conn, "ERROR: Store rejected DELETE: %v\n", err)
+				return
+			} else {
+				fmt.Fprintf(conn, "Key: %s succesfully deleted", key)
+			}
+			ForwardToAllPeers("DELETE", key, "", peers, registy)
+			return
+		}
+
+		if method == "SYNC" {
+			if len(parts) < 2 {
+				fmt.Fprintf(conn, "ERROR: SYNC request missing version\n")
+				return
+			}
+			nodeVersion, err := strconv.Atoi(parts[1])
+			if err != nil {
+				fmt.Fprintf(conn, "ERROR: invalid SYNC version\n")
+				return
+			}
+			if nodeVersion == snap.store.Version() {
+				fmt.Fprintf(conn, "SYNC_OK\n")
+			} else {
+				snapJSON, err := snap.store.Snapshot()
+				if err != nil {
+					return
+				}
+				fmt.Fprintf(conn, "SYNC_DATA|%s\n", snapJSON)
+			}
+			return
+		}
+		fmt.Fprintf(conn, "ERROR: Unknown method: %s\n", method)
+	}
 }

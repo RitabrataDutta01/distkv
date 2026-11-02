@@ -2,6 +2,7 @@ package tests
 
 import (
 	"distkv/store"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -13,8 +14,11 @@ func tempSnap(t *testing.T) string {
 }
 
 func TestSetGetDelete(t *testing.T) {
-
-	s := store.NewStore(tempSnap(t))
+	s, err := store.NewStore(tempSnap(t))
+	if err != nil {
+		t.Fatalf("Failed to initialize store: %v", err)
+	}
+	defer s.Close()
 
 	if _, ok := s.Get("missing"); ok {
 		t.Fatal("expected missing key to be absent")
@@ -35,12 +39,14 @@ func TestSetGetDelete(t *testing.T) {
 	if _, ok := s.Get("key1"); ok {
 		t.Fatal("Expected key to be deleted, but it was found")
 	}
-
 }
 
 func TestConcurrentSetGet(t *testing.T) {
-
-	s := store.NewStore(tempSnap(t))
+	s, err := store.NewStore(tempSnap(t))
+	if err != nil {
+		t.Fatalf("Failed to initialize store: %v", err)
+	}
+	defer s.Close()
 
 	var wg sync.WaitGroup
 
@@ -50,7 +56,7 @@ func TestConcurrentSetGet(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 
-			key := "key" + string(rune('0'+n%10))
+			key := fmt.Sprintf("key%d", n%10)
 
 			if err := s.Set(key, "concurrent_val"); err != nil {
 				t.Errorf("Concurrent Set failed: %v", err)
@@ -58,7 +64,6 @@ func TestConcurrentSetGet(t *testing.T) {
 			}
 
 			s.Get(key)
-
 		}(i)
 	}
 
